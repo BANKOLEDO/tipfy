@@ -43,8 +43,11 @@ export default function FlowAnimation() {
         {/* Tipfy — pulses while receiving */}
         <div className="flex flex-col items-center gap-2.5 shrink-0 w-[120px] sm:w-[140px]">
           <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-accent flex items-center justify-center shadow-lg shadow-accent/20" style={{ animation: 'flow-pulse 3s ease-in-out infinite' }}>
-            <svg viewBox="0 0 24 24" className="w-6 h-6 sm:w-7 sm:h-7" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+            <svg viewBox="0 0 24 24" className="w-6 h-6 sm:w-7 sm:h-7" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="9" r="7.5" />
+              <path d="M9.5 6h5M9.5 9h5" strokeWidth="1.8" />
+              <path d="M10.5 6v6M13.5 6v6" strokeWidth="1.8" />
+              <path d="M7 19.5l2.5-3h5l2.5 3" />
             </svg>
           </div>
           <p className="text-xs sm:text-sm font-bold text-accent">tipfy</p>
