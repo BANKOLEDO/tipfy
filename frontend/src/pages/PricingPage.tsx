@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
-import { motion } from 'framer-motion'
-import { Check, X, ArrowRight } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Check, X, ArrowRight, ChevronDown } from 'lucide-react'
 import { useState } from 'react'
 import Nav from '~/components/landing/Nav'
 import Footer from '~/components/landing/Footer'
@@ -40,10 +40,68 @@ const faqs = [
   { q: 'Can I switch plans anytime?', a: 'Yes. Upgrade instantly. Downgrade at the end of your billing cycle. No lock-in, no cancellation fees.' },
   { q: 'How fast are withdrawals?', a: 'Our average withdrawal time is 22 seconds. We connect directly to Nigerian bank APIs.' },
   { q: 'Do you support team accounts?', a: 'Yes. Pro supports up to 5 members. Business supports unlimited members with advanced splits.' },
+  { q: 'Is my money safe?', a: 'Yes. We use bank-level encryption and are PCI DSS compliant. All transactions are processed through licensed Nigerian payment processors.' },
+  { q: 'Can I customise my tip page?', a: 'Absolutely. Pro and Business plans let you add your own branding, colours, profile photo, bio, and custom tip amounts.' },
+  { q: 'What payment methods do you accept?', a: 'We accept all major debit and credit cards, bank transfers, and USSD payments through our secure payment partners.' },
+  { q: 'How do I get started?', a: 'Sign up for free, customise your profile, share your unique link or QR code, and start receiving tips in minutes.' },
+  { q: 'Are there any hidden fees?', a: 'None. The only charge is the 2.5% processing fee on each tip. No monthly fees on Starter, and no surprise charges on any plan.' },
+  { q: 'Do you offer refunds?', a: 'Tip recipients receive funds directly, so refunds are handled between you and your tipper. We can assist with disputed transactions on a case-by-case basis.' },
 ]
+
+function FaqItem({ faq, index, open, onToggle }: { faq: { q: string; a: string }; index: number; open: boolean; onToggle: () => void }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true }}
+      transition={{ delay: index * 0.06 }}
+      className="group"
+    >
+      <button
+        onClick={onToggle}
+        className={`w-full text-left flex items-start gap-4 p-5 rounded-2xl transition-all duration-300 ${
+          open
+            ? 'bg-accent/5 ring-1 ring-accent/20'
+            : 'bg-white hover:bg-gray-50/80 ring-1 ring-gray-100 hover:ring-gray-200'
+        }`}
+      >
+        <span
+          className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-all duration-300 ${
+            open
+              ? 'bg-accent text-white rotate-0'
+              : 'bg-gray-100 text-gray-400 group-hover:bg-accent/10 group-hover:text-accent'
+          }`}
+        >
+          <ChevronDown
+            className={`h-4 w-4 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
+          />
+        </span>
+        <div className="flex-1 min-w-0">
+          <h3 className={`font-semibold text-sm transition-colors duration-200 ${open ? 'text-accent' : 'text-dark-text'}`}>
+            {faq.q}
+          </h3>
+          <AnimatePresence initial={false}>
+            {open && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+                className="overflow-hidden"
+              >
+                <p className="text-sm text-gray-500 leading-relaxed pt-2">{faq.a}</p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </button>
+    </motion.div>
+  )
+}
 
 export default function PricingPage() {
   const [annual, setAnnual] = useState(false)
+  const [openIndex, setOpenIndex] = useState<number | null>(null)
 
   return (
     <div className="min-h-screen bg-light text-dark-text pattern-grid">
@@ -84,14 +142,12 @@ export default function PricingPage() {
             ))}
           </div>
 
-          <motion.h2 initial={{ opacity: 0, y: 16 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} className="text-xl sm:text-2xl font-bold mb-6">Frequently asked questions</motion.h2>
-          <div className="space-y-3 max-w-3xl">
+          <div className="max-w-3xl mx-auto text-center">
+            <motion.h2 initial={{ opacity: 0, y: 16 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} className="text-xl sm:text-2xl font-bold mb-6">Frequently asked questions</motion.h2>
+          </div>
+          <div className="space-y-3 max-w-3xl mx-auto">
             {faqs.map((faq, i) => (
-              <motion.div key={i} initial={{ opacity: 0, y: 12 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} transition={{ delay: i * 0.05 }}
-                className="bg-white border border-gray-100 rounded-xl p-5">
-                <h3 className="font-semibold text-sm mb-1.5">{faq.q}</h3>
-                <p className="text-sm text-gray-500 leading-relaxed">{faq.a}</p>
-              </motion.div>
+              <FaqItem key={i} faq={faq} index={i} open={openIndex === i} onToggle={() => setOpenIndex(openIndex === i ? null : i)} />
             ))}
           </div>
 
