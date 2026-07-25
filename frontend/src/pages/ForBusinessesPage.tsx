@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { ArrowRight, Building2, BarChart3, Users, Shield, Zap, Globe } from 'lucide-react'
+import { ArrowRight, Building2, BarChart3, Users, Shield, Globe, Code } from 'lucide-react'
 import Nav from '~/components/landing/Nav'
 import Footer from '~/components/landing/Footer'
 
@@ -19,7 +19,7 @@ const enterpriseFeatures = [
   { icon: <BarChart3 className="h-5 w-5" />, title: 'Financial reporting', desc: 'Export tax-ready reports for your accountant.' },
   { icon: <Users className="h-5 w-5" />, title: 'Staff management', desc: 'Onboard staff, assign roles, track performance.' },
   { icon: <Shield className="h-5 w-5" />, title: 'Compliance & audit', desc: 'KYC verification and audit logs built in.' },
-  { icon: <Zap className="h-5 w-5" />, title: 'API & webhooks', desc: 'Integrate tipping data into your existing systems.' },
+  { icon: <Code className="h-5 w-5" />, title: 'API & webhooks', desc: 'Integrate tipping data into your existing systems.' },
   { icon: <Globe className="h-5 w-5" />, title: 'Custom branding', desc: 'White-label with your logo, colors, and messaging.' },
 ]
 
