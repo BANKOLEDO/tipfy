@@ -96,7 +96,8 @@ export default function UseCasesSection() {
           </motion.p>
         </motion.div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+        {/* Desktop: image grid */}
+        <div className="hidden sm:grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
           {cases.map((c, i) => (
             <motion.div
               key={c.title}
@@ -124,8 +125,44 @@ export default function UseCasesSection() {
             </motion.div>
           ))}
         </div>
+
+        {/* Mobile: horizontal scroll image cards with swipe hint */}
+        <div className="sm:hidden -mx-4 px-4">
+          <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-3 scrollbar-none" style={{ WebkitOverflowScrolling: 'touch' }}>
+            {cases.map((c, i) => (
+              <motion.div
+                key={c.title}
+                initial={{ opacity: 0, x: 20 }}
+                whileInView={{ opacity: 1, x: 0 }}
+                viewport={{ once: true }}
+                transition={{ delay: i * 0.06 }}
+                onClick={() => setActive(i)}
+                className="snap-start shrink-0 w-[280px] rounded-2xl overflow-hidden cursor-pointer active:scale-[0.97] transition-transform"
+              >
+                <div className="relative aspect-[4/5] overflow-hidden">
+                  <img src={c.img} alt={c.title} className="h-full w-full object-cover" loading="lazy" />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
+                  <span className="absolute top-3 left-3 px-2.5 py-1 text-[9px] font-semibold uppercase tracking-wider bg-white/15 backdrop-blur-md text-white/80 rounded-full border border-white/10">{c.tag}</span>
+                  <div className="absolute bottom-0 left-0 right-0 p-4">
+                    <h3 className="font-bold text-sm text-white leading-snug">{c.title}</h3>
+                    <p className="text-[11px] text-white/60 mt-1 leading-relaxed line-clamp-2">{c.desc}</p>
+                    <div className="flex items-center gap-1 mt-2.5 text-accent">
+                      <span className="text-[11px] font-medium">Learn more</span>
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+          <motion.div initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} viewport={{ once: true }} className="flex items-center justify-center gap-1.5 mt-1">
+            <span className="text-[10px] text-text-muted font-medium">Swipe to explore</span>
+            <motion.svg animate={{ x: [0, 4, 0] }} transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }} className="w-3 h-3 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></motion.svg>
+          </motion.div>
+        </div>
       </div>
 
+      {/* Modal — bottom sheet on mobile, centered on desktop */}
       <AnimatePresence>
         {active !== null && item && (
           <motion.div
@@ -134,17 +171,73 @@ export default function UseCasesSection() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/60 backdrop-blur-sm"
+            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm"
             onClick={() => setActive(null)}
           >
+            {/* Mobile: bottom sheet */}
             <motion.div
-              key="modal"
+              key="sheet-mobile"
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'spring', damping: 28, stiffness: 300 }}
+              onClick={(e) => e.stopPropagation()}
+              className="sm:hidden w-full max-h-[88vh] overflow-y-auto bg-bg-surface rounded-t-3xl"
+            >
+              <div className="flex justify-center pt-3 pb-1">
+                <div className="w-10 h-1 rounded-full bg-border" />
+              </div>
+
+              <div className="relative aspect-[16/7] overflow-hidden">
+                <img src={item.img} alt={item.title} className="h-full w-full object-cover" />
+                <div className="absolute inset-0 bg-gradient-to-t from-bg-surface via-transparent to-transparent" />
+                <button onClick={() => setActive(null)} className="absolute top-3 right-3 w-8 h-8 flex items-center justify-center rounded-full bg-black/40 backdrop-blur-md text-white/70 hover:text-white transition-colors">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              </div>
+
+              <div className="p-5 pb-8">
+                <span className="inline-block px-2.5 py-1 mb-2 text-[9px] font-semibold uppercase tracking-wider bg-accent/10 text-accent rounded-full">{item.tag}</span>
+                <h3 className="font-bold text-xl text-text">{item.title}</h3>
+                <p className="text-sm text-text-secondary mt-1.5 leading-relaxed">{item.desc}</p>
+
+                <div className="mt-6">
+                  <h4 className="text-[10px] font-bold uppercase tracking-wider text-accent mb-3">How it works</h4>
+                  <ol className="space-y-3">
+                    {item.howItWorks.map((step, si) => (
+                      <li key={si} className="flex gap-3 text-sm text-text-secondary leading-relaxed">
+                        <span className="shrink-0 w-5 h-5 mt-0.5 rounded-full bg-accent/10 text-accent text-[10px] font-bold flex items-center justify-center">{si + 1}</span>
+                        <span>{step}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+
+                <div className="mt-5 flex flex-wrap gap-2">
+                  {item.benefits.map((b) => (
+                    <span key={b} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-secondary bg-bg rounded-lg border border-border">
+                      <svg className="w-3 h-3 text-success shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                      {b}
+                    </span>
+                  ))}
+                </div>
+
+                <div className="flex gap-2 mt-7">
+                  <button onClick={() => setActive(null)} className="flex-1 py-3 text-sm font-medium text-text-secondary bg-bg rounded-xl border border-border transition-colors">Close</button>
+                  <button className="flex-1 py-3 text-sm font-medium text-white bg-accent hover:bg-accent-hover rounded-xl transition-colors">Get started</button>
+                </div>
+              </div>
+            </motion.div>
+
+            {/* Desktop: centered modal */}
+            <motion.div
+              key="modal-desktop"
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               transition={{ duration: 0.25, ease: [0.25, 0.46, 0.45, 0.94] }}
               onClick={(e) => e.stopPropagation()}
-              className="relative w-full max-w-lg max-h-[85vh] overflow-y-auto bg-bg-surface border border-border rounded-2xl shadow-neo-lg scrollbar-thin"
+              className="hidden sm:block relative w-full max-w-lg max-h-[85vh] overflow-y-auto bg-bg-surface border border-border rounded-2xl shadow-neo-lg scrollbar-thin"
             >
               <div className="relative aspect-[16/9] overflow-hidden sticky top-0 z-10">
                 <img src={item.img} alt={item.title} className="h-full w-full object-cover" />
