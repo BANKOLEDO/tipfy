@@ -61,20 +61,17 @@ export default function TipsPage() {
 
   useEffect(() => {
     setLoading(true)
-    api<any>('/tips/me').then((data) => setTips(Array.isArray(data) ? data : data.tips || [])).catch(() => {
-      setTips([
-        { id: '1', amount: 5000, sender: { displayName: 'Chioma A.' }, senderName: 'Chioma A.', message: 'Great work!', category: 'general', status: 'completed', createdAt: new Date(Date.now() - 120000).toISOString() },
-        { id: '2', amount: 2000, sender: { displayName: 'Tunde M.' }, senderName: 'Tunde M.', message: 'Thanks for the content', category: 'content', status: 'completed', createdAt: new Date(Date.now() - 900000).toISOString() },
-        { id: '3', amount: 10000, sender: { displayName: 'Fatima B.' }, senderName: 'Fatima B.', message: 'Keep going!', category: 'service', status: 'completed', createdAt: new Date(Date.now() - 3600000).toISOString() },
-        { id: '4', amount: 1500, sender: { displayName: 'Chidi O.' }, senderName: 'Chidi O.', message: '', category: 'food', status: 'completed', createdAt: new Date(Date.now() - 7200000).toISOString() },
-        { id: '5', amount: 3000, sender: { displayName: 'Amina B.' }, senderName: 'Amina B.', message: 'The jollof was unreal', category: 'food', status: 'pending', createdAt: new Date(Date.now() - 14400000).toISOString() },
-      ])
+    api<any>('/tips/me').then((data) => {
+      setTips(data.tips || [])
+    }).catch(() => {
+      setTips([])
     }).finally(() => setLoading(false))
   }, [])
 
   const filtered = filter === 'all' ? tips : tips.filter((t) => t.category === filter)
-  const totalEarned = tips.reduce((s, t) => s + (t.amount || 0), 0)
-  const avgTip = tips.length ? Math.round(totalEarned / tips.length) : 0
+  const completedTips = tips.filter((t) => t.status === 'completed')
+  const totalEarned = completedTips.reduce((s, t) => s + (t.amount || 0), 0)
+  const avgTip = completedTips.length ? Math.round(totalEarned / completedTips.length) : 0
 
   return (
     <motion.div variants={stagger} initial="hidden" animate="visible" className="space-y-5">
