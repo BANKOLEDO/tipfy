@@ -191,12 +191,11 @@ export default function Dashboard() {
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
-    api<any[]>('/tips/stats').then(setRecentTips).catch(() => {
-      setRecentTips([
-        { id: '1', amount: 5000, sender: { displayName: 'Chioma A.' }, category: 'General', createdAt: new Date(Date.now() - 120000).toISOString() },
-        { id: '2', amount: 2000, sender: { displayName: 'Tunde M.' }, category: 'Content', createdAt: new Date(Date.now() - 900000).toISOString() },
-        { id: '3', amount: 10000, sender: { displayName: 'Fatima B.' }, category: 'Service', createdAt: new Date(Date.now() - 3600000).toISOString() },
-      ])
+    api<any>('/tips/me').then((data) => {
+      const tips = data.tips || []
+      setRecentTips(tips.slice(0, 5))
+    }).catch(() => {
+      setRecentTips([])
     })
   }, [])
 
