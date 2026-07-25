@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import { ArrowUpRight, Clock, CheckCircle, XCircle, Building2 } from 'lucide-react'
 import { api, ApiError } from '~/lib/api'
-import { useAuthStore } from '~/lib/store'
+import { useAuthStore, useUIStore } from '~/lib/store'
 import { formatNaira, timeAgo } from '~/lib/utils'
 import { BANKS } from '~/config/constants'
 
@@ -46,7 +46,7 @@ export default function WithdrawPage() {
   const [accountNumber, setAccountNumber] = useState('')
   const [loading, setLoading] = useState(false)
   const [withdrawals, setWithdrawals] = useState<any[]>([])
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const addToast = useUIStore((s) => s.addToast)
 
   useEffect(() => {
     api<any>('/withdrawals').then((data) => setWithdrawals(Array.isArray(data) ? data : data.withdrawals || [])).catch(() => {})
@@ -54,19 +54,18 @@ export default function WithdrawPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setMessage(null)
     const amt = parseInt(amount)
-    if (!amt || amt <= 0) return setMessage({ type: 'error', text: 'Enter a valid amount' })
-    if (!bankCode) return setMessage({ type: 'error', text: 'Select a bank' })
-    if (accountNumber.length !== 10) return setMessage({ type: 'error', text: 'Enter a valid 10-digit account number' })
+    if (!amt || amt <= 0) return addToast('error', 'Enter a valid amount')
+    if (!bankCode) return addToast('error', 'Select a bank')
+    if (accountNumber.length !== 10) return addToast('error', 'Enter a valid 10-digit account number')
     setLoading(true)
     try {
       await api('/withdrawals', { method: 'POST', body: { amount: amt, bankCode, accountNumber } })
-      setMessage({ type: 'success', text: 'Withdrawal submitted!' })
+      addToast('success', 'Withdrawal submitted!')
       setAmount(''); setAccountNumber(''); setBankCode('')
     api<any>('/withdrawals').then((data) => setWithdrawals(Array.isArray(data) ? data : data.withdrawals || [])).catch(() => {})
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof ApiError ? err.message : 'Withdrawal failed' })
+      addToast('error', err instanceof ApiError ? err.message : 'Withdrawal failed')
     } finally { setLoading(false) }
   }
 
@@ -143,18 +142,6 @@ export default function WithdrawPage() {
                 onChange={(e) => setAccountNumber(e.target.value.replace(/\D/g, ''))}
                 className={`${inputClass} font-mono-nums tracking-[0.2em] text-center text-lg`} />
             </div>
-
-            <AnimatePresence>
-              {message && (
-                <motion.div initial={{ opacity: 0, y: -8, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
-                  className={`flex items-center gap-2 p-3 rounded-xl text-sm font-medium ${
-                    message.type === 'success' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-red-50 text-red-600 border border-red-100'
-                  }`}>
-                  {message.type === 'success' ? <CheckCircle className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
-                  {message.text}
-                </motion.div>
-              )}
-            </AnimatePresence>
 
             <motion.button type="submit" disabled={loading} whileTap={{ scale: 0.98 }}
               className="w-full h-13 bg-gradient-to-r from-accent to-blue-600 text-white rounded-2xl text-sm font-bold hover:from-accent-hover hover:to-blue-500 disabled:opacity-50 transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-500/25">
