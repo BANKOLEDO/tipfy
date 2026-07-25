@@ -1,0 +1,230 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+ 
+// CORE MODELS
+
+model User {
+  id                String   @id @default(cuid())
+  email             String   @unique
+  passwordHash      String   @map("password_hash")
+  username          String   @unique
+  displayName       String   @map("display_name")
+  avatarUrl         String?  @map("avatar_url")
+  bio               String?
+  location          String?
+  isBusiness        Boolean  @default(false) @map("is_business")
+  businessName      String?  @map("business_name")
+  businessCategory  String?  @map("business_category")
+  totalTipsReceived Int      @default(0) @map("total_tips_received")
+  totalAmount       Decimal  @default(0) @db.Decimal(12, 2) @map("total_amount")
+  rating            Decimal  @default(0) @db.Decimal(3, 2)
+  isVerified        Boolean  @default(false) @map("is_verified")
+  isActive          Boolean  @default(true) @map("is_active")
+  lastLoginAt       DateTime? @map("last_login_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  sentTips        Tip[]             @relation("Sender")
+  receivedTips    Tip[]             @relation("Recipient")
+  withdrawals     Withdrawal[]
+  teamMemberships Team[]            @relation("MemberTeam")
+  businessTeams   Team[]            @relation("BusinessTeam")
+  feedbackGiven   Feedback[]        @relation("FeedbackSender")
+  feedbackReceived Feedback[]       @relation("FeedbackRecipient")
+  notifications   Notification[]
+  auditLogs       AuditLog[]
+  sessions        Session[]
+  passwordResetTokens PasswordResetToken[]
+
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  tokenHash    String   @unique @map("token_hash")
+  ipAddress    String?  @map("ip_address")
+  userAgent    String?  @map("user_agent")
+  expiresAt    DateTime @map("expires_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+model Tip {
+  id               String   @id @default(cuid())
+  reference        String   @unique
+  senderId         String?  @map("sender_id")
+  senderName       String?  @map("sender_name")
+  recipientId      String   @map("recipient_id")
+  amount           Decimal  @db.Decimal(12, 2)
+  currency         String   @default("NGN")
+  message          String?
+  isAnonymous      Boolean  @default(false) @map("is_anonymous")
+  status           String   @default("pending")
+  monnifyReference String?  @map("monnify_reference")
+  paymentMethod    String?  @map("payment_method")
+  completedAt      DateTime? @map("completed_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  sender      User?        @relation("Sender", fields: [senderId], references: [id])
+  recipient   User         @relation("Recipient", fields: [recipientId], references: [id])
+  transaction Transaction?
+  feedback    Feedback?
+
+  @@index([recipientId])
+  @@index([senderId])
+  @@index([reference])
+  @@index([status])
+  @@index([createdAt])
+  @@map("tips")
+}
+
+model Transaction {
+  id              String   @id @default(cuid())
+  tipId           String   @unique @map("tip_id")
+  amount          Decimal  @db.Decimal(12, 2)
+  currency        String   @default("NGN")
+  paymentMethod   String   @map("payment_method")
+  monnifyResponse Json     @map("monnify_response")
+  status          String   @default("pending")
+  completedAt     DateTime? @map("completed_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  tip Tip @relation(fields: [tipId], references: [id])
+
+  @@map("transactions")
+}
+
+model Withdrawal {
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
+  amount          Decimal  @db.Decimal(12, 2)
+  bankCode        String   @map("bank_code")
+  bankName        String   @map("bank_name")
+  accountNumber   String   @map("account_number")
+  accountName     String   @map("account_name")
+  reference       String   @unique
+  status          String   @default("pending")
+  monnifyResponse Json?    @map("monnify_response")
+  processedAt     DateTime? @map("processed_at")
+  failureReason   String?  @map("failure_reason")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([reference])
+  @@map("withdrawals")
+}
+
+model Team {
+  id          String   @id @default(cuid())
+  businessId  String   @map("business_id")
+  memberId    String   @map("member_id")
+  role        String   @default("staff")
+  tipsReceived Int     @default(0) @map("tips_received")
+  totalAmount Decimal  @default(0) @db.Decimal(12, 2) @map("total_amount")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  business User @relation("BusinessTeam", fields: [businessId], references: [id])
+  member   User @relation("MemberTeam", fields: [memberId], references: [id])
+
+  @@unique([businessId, memberId])
+  @@map("teams")
+}
+
+model Feedback {
+  id          String   @id @default(cuid())
+  tipId       String   @unique @map("tip_id")
+  senderId    String?  @map("sender_id")
+  recipientId String   @map("recipient_id")
+  rating      Int      @db.SmallInt
+  comment     String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  tip       Tip   @relation(fields: [tipId], references: [id])
+  sender    User? @relation("FeedbackSender", fields: [senderId], references: [id])
+  recipient User  @relation("FeedbackRecipient", fields: [recipientId], references: [id])
+
+  @@index([recipientId])
+  @@map("feedbacks")
+}
+
+
+// SECURITY & COMPLIANCE
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String?  @map("user_id")
+  action      String
+  resource    String
+  resourceId  String?  @map("resource_id")
+  ipAddress   String?  @map("ip_address")
+  userAgent   String?  @map("user_agent")
+  metadata    Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model RateLimit {
+  id        String   @id @default(cuid())
+  key       String
+  count     Int      @default(1)
+  expiresAt DateTime @map("expires_at")
+
+  @@index([key, expiresAt])
+  @@map("rate_limits")
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  type      String
+  title     String
+  body      String
+  link      String?
+  data      Json?
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
