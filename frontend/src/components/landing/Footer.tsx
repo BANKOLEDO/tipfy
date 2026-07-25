@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Zap } from 'lucide-react'
+import NairaCoinIcon from '~/components/NairaCoinIcon'
 
 export default function Footer() {
   return (
@@ -8,7 +8,7 @@ export default function Footer() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-6 sm:gap-8 mb-10 sm:mb-12">
           <div className="col-span-2 md:col-span-1">
             <Link to="/" className="flex items-center gap-2 mb-3 sm:mb-4">
-              <div className="h-7 w-7 sm:h-8 sm:w-8 rounded-lg bg-accent flex items-center justify-center"><Zap className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-white" /></div>
+              <div className="h-7 w-7 sm:h-8 sm:w-8 rounded-lg bg-accent flex items-center justify-center"><NairaCoinIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-white" /></div>
               <span className="text-base sm:text-lg font-bold tracking-tight">tipfy</span>
             </Link>
             <p className="text-xs sm:text-sm text-text-muted max-w-[240px]">The simplest way to get tipped in Nigeria. Built for people who do real work.</p>
