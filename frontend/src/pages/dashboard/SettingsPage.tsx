@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Copy, Check, ExternalLink, MapPin, Calendar, Mail, Link2, UserCircle, Briefcase, ArrowUpRight, Download } from 'lucide-react'
 import { QRCodeSVG, QRCodeCanvas } from 'qrcode.react'
 import { api, ApiError } from '~/lib/api'
-import { useAuthStore } from '~/lib/store'
+import { useAuthStore, useUIStore } from '~/lib/store'
 import { Avatar } from '~/components/ui/Avatar'
 import { BUSINESS_CATEGORIES } from '~/config/constants'
 
@@ -13,7 +13,7 @@ const stagger = { visible: { transition: { staggerChildren: 0.06 } } }
 export default function SettingsPage() {
   const { user, updateUser } = useAuthStore()
   const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const addToast = useUIStore((s) => s.addToast)
   const [copied, setCopied] = useState(false)
   const qrCanvasRef = useRef<HTMLCanvasElement>(null)
   const [profile, setProfile] = useState({
@@ -25,14 +25,13 @@ export default function SettingsPage() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
-    setMessage(null)
     setSaving(true)
     try {
-      const data = await api<any>('/users/me', { method: 'PATCH', body: { ...profile, ...business } })
-      updateUser(data)
-      setMessage({ type: 'success', text: 'Settings saved!' })
+      const res = await api<any>('/users/profile', { method: 'PUT', body: { ...profile, ...business } })
+      if (res?.user) updateUser(res.user)
+      addToast('success', 'Settings saved!')
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof ApiError ? err.message : 'Failed to save' })
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to save')
     } finally { setSaving(false) }
   }
 
@@ -115,7 +114,7 @@ export default function SettingsPage() {
     ctx.fillStyle = 'white'
     ctx.font = 'bold 13px system-ui'
     ctx.textAlign = 'center'
-    ctx.fillText('\u26A1', logoX + logoS / 2, logoY + logoS / 2 + 5)
+    ctx.fillText('\u20A6', logoX + logoS / 2, logoY + logoS / 2 + 5)
 
     // tipfy wordmark
     ctx.fillStyle = '#1A1A2E'
@@ -374,18 +373,6 @@ export default function SettingsPage() {
                 )}
               </AnimatePresence>
             </motion.div>
-
-            {/* Message */}
-            <AnimatePresence>
-              {message && (
-                <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                  className={`flex items-center gap-2 p-3.5 rounded-xl text-sm font-medium ${
-                    message.type === 'success' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-red-50 text-red-600 border border-red-100'
-                  }`}>
-                  {message.text}
-                </motion.div>
-              )}
-            </AnimatePresence>
 
             {/* Desktop save */}
             <motion.div variants={fadeUp} className="hidden lg:flex items-center justify-between">
