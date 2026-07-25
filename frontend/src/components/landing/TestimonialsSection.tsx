@@ -3,6 +3,12 @@ import { motion } from 'framer-motion'
 const fadeUp = { hidden: { opacity: 0, y: 24 }, visible: { opacity: 1, y: 0 } }
 const stagger = { visible: { transition: { staggerChildren: 0.08 } } }
 
+const testimonials = [
+  { name: 'Chioma O.', role: 'Hair Stylist, Lagos', quote: 'My clients just scan and tip. No more awkward "send me account number" moments. I get paid before they even leave the chair.', img: 'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?w=400&q=80&auto=format&fit=crop' },
+  { name: 'Emeka A.', role: 'Content Creator', quote: 'I dropped my tipfy link in my bio and pinned it in my comments. That week alone I made more from tips than two brand deals combined.', img: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&q=80&auto=format&fit=crop' },
+  { name: 'Fatima B.', role: 'Restaurant Owner, Abuja', quote: 'Staff tips used to disappear. Now it splits automatically. Fair, transparent, done.', img: 'https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?w=400&q=80&auto=format&fit=crop' },
+]
+
 export default function TestimonialsSection() {
   return (
     <section className="py-16 sm:py-24 bg-bg">
@@ -11,28 +17,62 @@ export default function TestimonialsSection() {
           <motion.p variants={fadeUp} className="text-accent text-[10px] sm:text-xs font-medium uppercase tracking-widest mb-2 sm:mb-3">From the community</motion.p>
           <motion.h2 variants={fadeUp} className="text-2xl sm:text-3xl lg:text-4xl font-bold">Real people. Real tips.</motion.h2>
         </motion.div>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-          {[
-            { name: 'Chioma O.', role: 'Hair Stylist, Lagos', quote: 'My clients just scan and tip. No more awkward "send me account number" moments. I get paid before they even leave the chair.', img: 'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?w=400&q=80&auto=format&fit=crop' },
-            { name: 'Emeka A.', role: 'Content Creator', quote: 'I dropped my tipfy link in my bio and pinned it in my comments. That week alone I made more from tips than two brand deals combined.', img: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&q=80&auto=format&fit=crop' },
-            { name: 'Fatima B.', role: 'Restaurant Owner, Abuja', quote: 'Staff tips used to disappear. Now it splits automatically. Fair, transparent, done.', img: 'https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?w=400&q=80&auto=format&fit=crop' },
-          ].map((s, i) => (
+
+        {/* Desktop: grid */}
+        <div className="hidden sm:grid sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+          {testimonials.map((s, i) => (
             <motion.div key={s.name} initial={{ opacity: 0, y: 16 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} transition={{ delay: i * 0.1 }} className="group">
-              <div className="rounded-xl sm:rounded-2xl overflow-hidden aspect-[3/2] sm:aspect-[4/3] mb-3 sm:mb-4 bg-bg-surface">
+              <div className="rounded-xl sm:rounded-2xl overflow-hidden aspect-[4/3] mb-3 sm:mb-4 bg-bg-surface">
                 <img src={s.img} alt={s.name} className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-700" loading="lazy" />
               </div>
-              <p className="text-text-secondary text-xs sm:text-sm leading-relaxed">"{s.quote}"</p>
-              <div className="mt-2 sm:mt-3 flex items-center gap-2.5">
+              <p className="text-text-secondary text-sm leading-relaxed">"{s.quote}"</p>
+              <div className="mt-3 flex items-center gap-2.5">
                 <div className="h-8 w-8 rounded-full bg-accent/10 flex items-center justify-center text-accent text-[10px] font-bold shrink-0">
                   {s.name.split(' ').map(n => n[0]).join('')}
                 </div>
                 <div>
-                  <p className="text-xs sm:text-sm font-medium">{s.name}</p>
-                  <p className="text-[10px] sm:text-xs text-text-muted">{s.role}</p>
+                  <p className="text-sm font-medium">{s.name}</p>
+                  <p className="text-xs text-text-muted">{s.role}</p>
                 </div>
               </div>
             </motion.div>
           ))}
+        </div>
+
+        {/* Mobile: horizontal scroll with image + quote cards */}
+        <div className="sm:hidden -mx-4 px-4">
+          <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-3 scrollbar-none" style={{ WebkitOverflowScrolling: 'touch' }}>
+            {testimonials.map((s, i) => (
+              <motion.div
+                key={s.name}
+                initial={{ opacity: 0, x: 20 }}
+                whileInView={{ opacity: 1, x: 0 }}
+                viewport={{ once: true }}
+                transition={{ delay: i * 0.08 }}
+                className="snap-start shrink-0 w-[300px]"
+              >
+                <div className="rounded-2xl overflow-hidden aspect-[3/2] bg-bg-surface mb-3">
+                  <img src={s.img} alt={s.name} className="h-full w-full object-cover" loading="lazy" />
+                </div>
+                <div className="px-1">
+                  <p className="text-text-secondary text-xs leading-relaxed">"{s.quote}"</p>
+                  <div className="mt-2.5 flex items-center gap-2.5">
+                    <div className="h-7 w-7 rounded-full bg-accent/10 flex items-center justify-center text-accent text-[9px] font-bold shrink-0">
+                      {s.name.split(' ').map(n => n[0]).join('')}
+                    </div>
+                    <div>
+                      <p className="text-xs font-medium">{s.name}</p>
+                      <p className="text-[10px] text-text-muted">{s.role}</p>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+          <motion.div initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} viewport={{ once: true }} className="flex items-center justify-center gap-1.5 mt-1">
+            <span className="text-[10px] text-text-muted font-medium">Swipe to explore</span>
+            <motion.svg animate={{ x: [0, 4, 0] }} transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }} className="w-3 h-3 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></motion.svg>
+          </motion.div>
         </div>
       </div>
     </section>
