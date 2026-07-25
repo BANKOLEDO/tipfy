@@ -2,6 +2,8 @@ import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from '~/lib/store'
 import ScrollToTop from '~/components/ScrollToTop'
+import ToastContainer from '~/components/ToastContainer'
+import NairaCoinIcon from '~/components/NairaCoinIcon'
 
 const DashboardLayout = lazy(() => import('~/layouts/DashboardLayout'))
 const LandingPage = lazy(() => import('~/pages/LandingPage'))
@@ -19,6 +21,8 @@ const PrivacyPage = lazy(() => import('~/pages/PrivacyPage'))
 const TermsPage = lazy(() => import('~/pages/TermsPage'))
 const RefundPage = lazy(() => import('~/pages/RefundPage'))
 const PaymentCompletePage = lazy(() => import('~/pages/PaymentCompletePage'))
+const ForgotPasswordPage = lazy(() => import('~/pages/ForgotPasswordPage'))
+const ResetPasswordPage = lazy(() => import('~/pages/ResetPasswordPage'))
 const Dashboard = lazy(() => import('~/pages/dashboard/Dashboard'))
 const TipsPage = lazy(() => import('~/pages/dashboard/TipsPage'))
 const WithdrawPage = lazy(() => import('~/pages/dashboard/WithdrawPage'))
@@ -29,9 +33,7 @@ function Loading() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-bg gap-3">
       <div className="h-12 w-12 rounded-xl bg-accent flex items-center justify-center shadow-glow">
-        <svg className="h-6 w-6 text-white animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-        </svg>
+        <NairaCoinIcon className="h-6 w-6 text-white animate-pulse" />
       </div>
       <p className="text-sm text-text-muted tracking-wide">tipfy</p>
     </div>
@@ -47,6 +49,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <ScrollToTop />
+      <ToastContainer />
       <Suspense fallback={<Loading />}>
         <Routes>
           <Route path="/" element={<LandingPage />} />
@@ -62,6 +65,8 @@ export default function App() {
           <Route path="/refund" element={<RefundPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/tip" element={<TipPage />} />
           <Route path="/tip/:username" element={<TipPage />} />
           <Route path="/tip/payment-complete" element={<PaymentCompletePage />} />
