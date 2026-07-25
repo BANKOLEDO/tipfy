@@ -55,8 +55,11 @@ export default function CtaSection() {
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2.5">
                           <div className="w-9 h-9 rounded-xl bg-accent flex items-center justify-center shadow-sm">
-                            <svg viewBox="0 0 24 24" className="w-4.5 h-4.5" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                            <svg viewBox="0 0 24 24" className="w-4.5 h-4.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <circle cx="12" cy="9" r="7.5" />
+                              <path d="M9.5 6h5M9.5 9h5" strokeWidth="1.8" />
+                              <path d="M10.5 6v6M13.5 6v6" strokeWidth="1.8" />
+                              <path d="M7 19.5l2.5-3h5l2.5 3" />
                             </svg>
                           </div>
                           <div>
@@ -217,7 +220,7 @@ export default function CtaSection() {
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <div className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center">
-                            <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
+                            <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="9" r="7.5" /><path d="M9.5 6h5M9.5 9h5" strokeWidth="1.8" /><path d="M10.5 6v6M13.5 6v6" strokeWidth="1.8" /><path d="M7 19.5l2.5-3h5l2.5 3" /></svg>
                           </div>
                           <p className="text-[10px] font-bold text-dark-text">tipfy</p>
                         </div>
