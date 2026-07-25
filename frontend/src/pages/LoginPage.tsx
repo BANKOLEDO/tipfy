@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Mail, Lock, Zap, Eye, EyeOff } from 'lucide-react'
+import { Mail, Lock, Eye, EyeOff } from 'lucide-react'
+import NairaCoinIcon from '~/components/NairaCoinIcon'
 import { api, ApiError, setToken } from '~/lib/api'
-import { useAuthStore } from '~/lib/store'
+import { useAuthStore, useUIStore } from '~/lib/store'
 import { Button } from '~/components/ui/Button'
 import { Input } from '~/components/ui/Input'
 
@@ -13,12 +14,11 @@ export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const addToast = useUIStore((s) => s.addToast)
   const [showPassword, setShowPassword] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setError('')
     setLoading(true)
     try {
       const data = await api('/auth/login', { method: 'POST', body: { email, password } }) as any
@@ -26,7 +26,7 @@ export default function LoginPage() {
       setAuth(data.user, data.token)
       navigate('/dashboard')
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Login failed')
+      addToast('error', err instanceof ApiError ? err.message : 'Login failed')
     } finally { setLoading(false) }
   }
 
@@ -37,18 +37,12 @@ export default function LoginPage() {
         {/* Left — form */}
         <div className="w-full lg:w-[42%] max-w-[380px]">
           <Link to="/" className="flex items-center gap-2 w-fit mb-8">
-            <div className="h-8 w-8 rounded-lg bg-accent flex items-center justify-center"><Zap className="h-4 w-4 text-white" /></div>
+            <div className="h-8 w-8 rounded-lg bg-accent flex items-center justify-center"><NairaCoinIcon className="h-4 w-4 text-white" /></div>
             <span className="text-lg font-bold tracking-tight text-dark-text">tipfy</span>
           </Link>
 
           <h1 className="text-2xl font-bold text-dark-text">Welcome back</h1>
           <p className="text-sm text-gray-500 mt-1">Log in to your dashboard</p>
-
-          {error && (
-            <div className="mt-4 px-3.5 py-2.5 rounded-lg bg-red-50 border border-red-200">
-              <p className="text-xs text-error">{error}</p>
-            </div>
-          )}
 
           <form onSubmit={handleSubmit} className="space-y-3 mt-6">
             <Input
@@ -68,7 +62,7 @@ export default function LoginPage() {
                 <input type="checkbox" className="w-3.5 h-3.5 rounded border-gray-300 accent-accent" />
                 <span className="text-xs text-gray-500">Remember me</span>
               </label>
-              <Link to="/" className="text-xs text-accent hover:text-accent-hover transition-colors">Forgot password?</Link>
+              <Link to="/forgot-password" className="text-xs text-accent hover:text-accent-hover transition-colors">Forgot password?</Link>
             </div>
 
             <Button type="submit" fullWidth loading={loading} className="mt-1">
@@ -127,7 +121,7 @@ export default function LoginPage() {
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2.5">
                           <div className="w-9 h-9 rounded-xl bg-accent flex items-center justify-center shadow-sm">
-                            <svg viewBox="0 0 24 24" className="w-4.5 h-4.5" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
+                            <svg viewBox="0 0 24 24" className="w-4.5 h-4.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="9" r="7.5" /><path d="M9.5 6h5M9.5 9h5" strokeWidth="1.8" /><path d="M10.5 6v6M13.5 6v6" strokeWidth="1.8" /><path d="M7 19.5l2.5-3h5l2.5 3" /></svg>
                           </div>
                           <div>
                             <p className="text-[13px] font-bold text-dark-text">tipfy</p>
