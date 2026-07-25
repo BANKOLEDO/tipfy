@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, Trash2 } from 'lucide-react'
 import { api, ApiError } from '~/lib/api'
-import { useAuthStore } from '~/lib/store'
+import { useAuthStore, useUIStore } from '~/lib/store'
 import { Avatar } from '~/components/ui/Avatar'
 
 const fadeUp = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }
@@ -66,7 +66,7 @@ export default function TeamPage() {
   const [teams, setTeams] = useState<any[]>([])
   const [username, setUsername] = useState('')
   const [loading, setLoading] = useState(false)
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const addToast = useUIStore((s) => s.addToast)
 
   useEffect(() => {
     api<any>('/teams').then((data) => setTeams(Array.isArray(data) ? data : data.teams || [])).catch(() => {})
@@ -74,15 +74,14 @@ export default function TeamPage() {
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()
-    setMessage(null)
     setLoading(true)
     try {
       await api('/teams', { method: 'POST', body: { username } })
-      setMessage({ type: 'success', text: 'Member added!' })
+      addToast('success', 'Member added!')
       setUsername('')
     api<any>('/teams').then((data) => setTeams(Array.isArray(data) ? data : data.teams || [])).catch(() => {})
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof ApiError ? err.message : 'Failed' })
+      addToast('error', err instanceof ApiError ? err.message : 'Failed')
     } finally { setLoading(false) }
   }
 
@@ -90,7 +89,10 @@ export default function TeamPage() {
     try {
       await api(`/teams/${memberId}`, { method: 'DELETE' })
       setTeams((prev) => prev.filter((t) => t.id !== memberId))
-    } catch (err) {}
+      addToast('success', 'Member removed')
+    } catch (err) {
+      addToast('error', 'Failed to remove member')
+    }
   }
 
   return (
@@ -113,16 +115,6 @@ export default function TeamPage() {
             <Plus className="h-4 w-4" /> Add
           </motion.button>
         </form>
-        <AnimatePresence>
-          {message && (
-            <motion.div initial={{ opacity: 0, y: -8, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
-              className={`flex items-center gap-2 mt-3 p-3 rounded-xl text-sm font-medium ${
-                message.type === 'success' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-red-50 text-red-600 border border-red-100'
-              }`}>
-              {message.text}
-            </motion.div>
-          )}
-        </AnimatePresence>
       </motion.div>
 
       {/* Members */}
