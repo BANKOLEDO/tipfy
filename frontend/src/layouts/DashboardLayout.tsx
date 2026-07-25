@@ -1,6 +1,8 @@
 import { Link, useLocation, Outlet } from 'react-router-dom'
-import { Home, ArrowDownLeft, Wallet, Users, Settings, LogOut, Zap, X, ChevronLeft } from 'lucide-react'
+import { Home, ArrowDownLeft, Wallet, Users, Settings, LogOut, X, ChevronLeft } from 'lucide-react'
+import NairaCoinIcon from '~/components/NairaCoinIcon'
 import { useAuthStore, useUIStore } from '~/lib/store'
+import { api } from '~/lib/api'
 import { Avatar } from '~/components/ui/Avatar'
 import { AnimatePresence, motion } from 'framer-motion'
 import NotificationPanel from '~/components/NotificationPanel'
@@ -31,7 +33,7 @@ function Sidebar() {
         <div className="flex items-center justify-between p-5 pb-4">
           <Link to="/dashboard" className="flex items-center gap-2.5" onClick={() => setSidebarOpen(false)}>
             <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-accent to-blue-500 flex items-center justify-center shadow-[0_4px_12px_rgba(37,99,235,0.25)]">
-              <Zap className="h-4.5 w-4.5 text-white" />
+              <NairaCoinIcon className="h-4.5 w-4.5 text-white" />
             </div>
             <span className="text-lg font-bold tracking-tight text-dark-text">tipfy</span>
           </Link>
@@ -67,7 +69,7 @@ function Sidebar() {
               <p className="text-xs text-gray-400 truncate">@{user?.username}</p>
             </div>
           </div>
-          <button onClick={() => { clearAuth(); window.location.href = '/login' }}
+          <button onClick={() => { api('/auth/logout').catch(() => {}); clearAuth(); window.location.href = '/login' }}
             className="flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-sm text-gray-500 hover:text-red-500 hover:bg-red-50 transition-all duration-200 mt-1">
             <LogOut className="h-4 w-4" />Log out
           </button>
@@ -89,7 +91,7 @@ function TopNav() {
       </button>
       <Link to="/dashboard" className="hidden lg:flex items-center gap-2.5">
         <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-accent to-blue-500 flex items-center justify-center">
-          <Zap className="h-3.5 w-3.5 text-white" />
+          <NairaCoinIcon className="h-3.5 w-3.5 text-white" />
         </div>
         <span className="text-base font-bold tracking-tight text-dark-text">tipfy</span>
       </Link>
