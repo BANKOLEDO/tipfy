@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Zap, Send, CreditCard, ArrowLeft, Heart, Sparkles, Shield, ArrowRight, MessageCircle } from 'lucide-react'
+import { Send, CreditCard, ArrowLeft, Heart, Sparkles, Shield, ArrowRight, MessageCircle } from 'lucide-react'
+import NairaCoinIcon from '~/components/NairaCoinIcon'
 import { api } from '~/lib/api'
+import { useUIStore } from '~/lib/store'
 import { formatNaira } from '~/lib/utils'
 import { PRESET_AMOUNTS } from '~/config/constants'
 
@@ -19,6 +21,7 @@ export default function TipPage() {
   const [senderEmail, setSenderEmail] = useState('')
   const [message, setMessage] = useState('')
   const [processing, setProcessing] = useState(false)
+  const addToast = useUIStore((s) => s.addToast)
 
   useEffect(() => {
     if (!username) {
@@ -26,7 +29,7 @@ export default function TipPage() {
       setError('No username provided. Use a link like your-domain.com/username')
       return
     }
-    api(`/users/${username}`).then(setRecipient).catch(() => setError('User not found')).finally(() => setLoading(false))
+    api<{ user: any; recentTips: any[] }>(`/users/${username}`).then((res) => setRecipient(res.user)).catch(() => setError('User not found')).finally(() => setLoading(false))
   }, [username])
 
   const selectedAmount = amount || (customAmount ? parseInt(customAmount) : 0)
@@ -47,7 +50,7 @@ export default function TipPage() {
       }
     } catch (err) {
       setStep('details')
-      setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
+      addToast('error', err instanceof Error ? err.message : 'Something went wrong. Please try again.')
     } finally { setProcessing(false) }
   }
 
@@ -55,7 +58,7 @@ export default function TipPage() {
     <div className="min-h-screen bg-light flex items-center justify-center">
       <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col items-center gap-4">
         <div className="h-14 w-14 rounded-2xl bg-accent flex items-center justify-center shadow-glow">
-          <Zap className="h-7 w-7 text-white" />
+          <NairaCoinIcon className="h-7 w-7 text-white" />
         </div>
         <div className="h-1 w-24 bg-light-border rounded-full overflow-hidden">
           <motion.div className="h-full bg-accent rounded-full" initial={{ width: '0%' }} animate={{ width: '100%' }} transition={{ duration: 1.5, ease: 'easeInOut' }} />
@@ -87,7 +90,7 @@ export default function TipPage() {
       <div className="border-b border-light-border bg-white/60 backdrop-blur-md sticky top-0 z-20">
         <div className="max-w-lg mx-auto px-5 h-14 flex items-center justify-between">
           <button onClick={() => navigate('/')} className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded-lg bg-accent flex items-center justify-center"><Zap className="h-4 w-4 text-white" /></div>
+            <div className="h-8 w-8 rounded-lg bg-accent flex items-center justify-center"><NairaCoinIcon className="h-4 w-4 text-white" /></div>
             <span className="text-base font-bold text-dark-text tracking-tight">tipfy</span>
           </button>
           <div className="flex items-center gap-1.5 text-xs text-text-muted">
@@ -145,10 +148,10 @@ export default function TipPage() {
                 <h1 className="text-2xl font-bold text-dark-text mt-4">{recipient?.displayName}</h1>
                 <p className="text-text-muted text-sm mt-0.5">@{recipient?.username}</p>
                 {recipient?.bio && <p className="text-text-secondary text-sm mt-3 max-w-xs mx-auto leading-relaxed">{recipient.bio}</p>}
-                {recipient?.totalTipsCount > 0 && (
+                {recipient?.totalTipsReceived > 0 && (
                   <div className="mt-4 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-orange-50 border border-orange-200">
                     <span className="text-xs">🔥</span>
-                    <span className="text-xs font-semibold text-orange-600">{recipient.totalTipsCount}+ people have tipped</span>
+                    <span className="text-xs font-semibold text-orange-600">{recipient.totalTipsReceived}+ people have tipped</span>
                   </div>
                 )}
               </motion.div>
@@ -250,12 +253,6 @@ export default function TipPage() {
                         </div>
                       </div>
 
-                      {error && (
-                        <motion.p initial={{ opacity: 0, y: -5 }} animate={{ opacity: 1, y: 0 }} className="text-sm text-error bg-error-dim p-3 rounded-xl border border-error/20">
-                          {error}
-                        </motion.p>
-                      )}
-
                       <motion.button type="submit" whileTap={{ scale: 0.97 }} disabled={processing}
                         className="w-full h-14 bg-accent text-white rounded-2xl text-base font-bold hover:bg-accent-hover disabled:opacity-50 transition-all shadow-glow flex items-center justify-center gap-2.5">
                         {processing ? (
@@ -284,7 +281,7 @@ export default function TipPage() {
       {/* Footer */}
       <div className="fixed bottom-0 left-0 right-0 py-3 bg-light/80 backdrop-blur-sm border-t border-light-border z-10">
         <div className="flex items-center justify-center gap-1.5">
-          <Zap className="h-3 w-3 text-accent" />
+          <NairaCoinIcon className="h-3 w-3 text-accent" />
           <span className="text-[11px] font-medium text-text-muted">Powered by tipfy</span>
         </div>
       </div>
