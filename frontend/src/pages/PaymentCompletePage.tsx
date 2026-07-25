@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { useSearchParams, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Zap, CheckCircle, Star, ArrowLeft, Heart } from 'lucide-react'
+import { CheckCircle, Star, ArrowLeft, Heart } from 'lucide-react'
+import NairaCoinIcon from '~/components/NairaCoinIcon'
 import { api, ApiError } from '~/lib/api'
+import { useUIStore } from '~/lib/store'
 import { Card, CardContent } from '~/components/ui/Card'
 import { Button } from '~/components/ui/Button'
 import { Textarea } from '~/components/ui/Textarea'
@@ -15,18 +17,18 @@ export default function PaymentCompletePage() {
   const [comment, setComment] = useState('')
   const [submitted, setSubmitted] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState('')
+  const addToast = useUIStore((s) => s.addToast)
 
   const handleFeedback = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!rating || !ref) return
     setSubmitting(true)
-    setError('')
     try {
       await api(`/tips/${ref}/feedback`, { method: 'POST', body: { rating, comment: comment || undefined } })
       setSubmitted(true)
+      addToast('success', 'Thanks for your feedback!')
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not submit feedback')
+      addToast('error', err instanceof ApiError ? err.message : 'Could not submit feedback')
     } finally { setSubmitting(false) }
   }
 
@@ -35,7 +37,7 @@ export default function PaymentCompletePage() {
       <nav className="border-b border-border">
         <div className="max-w-md mx-auto px-4 h-14 flex items-center justify-center">
           <div className="flex items-center gap-2">
-            <div className="h-7 w-7 rounded-md bg-accent flex items-center justify-center"><Zap className="h-3.5 w-3.5 text-white" /></div>
+            <div className="h-7 w-7 rounded-md bg-accent flex items-center justify-center"><NairaCoinIcon className="h-3.5 w-3.5 text-white" /></div>
             <span className="font-bold">tipfy</span>
           </div>
         </div>
@@ -98,8 +100,6 @@ export default function PaymentCompletePage() {
                       showCounter
                     />
                   </div>
-
-                  {error && <p className="text-sm text-error text-center">{error}</p>}
 
                   <Button type="submit" fullWidth loading={submitting} disabled={!rating || submitting}>
                     Submit Feedback
