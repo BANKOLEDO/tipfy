@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
-import { Zap } from 'lucide-react'
+import NairaCoinIcon from '~/components/NairaCoinIcon'
 import { useAuthStore } from '~/lib/store'
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -26,7 +26,7 @@ export default function Nav() {
           {/* Logo */}
           <Link to="/" className="flex items-center gap-2 shrink-0">
             <div className="h-7 w-7 rounded-lg bg-accent flex items-center justify-center shadow-[0_2px_8px_rgba(37,99,235,0.3)]">
-              <Zap className="h-3.5 w-3.5 text-white" />
+              <NairaCoinIcon className="h-3.5 w-3.5 text-white" />
             </div>
             <span className="text-sm sm:text-base font-bold tracking-tight text-dark-text">tipfy</span>
           </Link>
