@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Mail, Lock, User, AtSign, Zap, ArrowRight, Eye, EyeOff } from 'lucide-react'
+import { Mail, Lock, User, AtSign, ArrowRight, Eye, EyeOff } from 'lucide-react'
+import NairaCoinIcon from '~/components/NairaCoinIcon'
 import { api, ApiError, setToken } from '~/lib/api'
-import { useAuthStore } from '~/lib/store'
+import { useAuthStore, useUIStore } from '~/lib/store'
 import { Button } from '~/components/ui/Button'
 import { Input } from '~/components/ui/Input'
 
@@ -12,14 +13,13 @@ export default function RegisterPage() {
   const { setAuth } = useAuthStore()
   const [form, setForm] = useState({ displayName: '', username: '', email: '', password: '', confirmPassword: '' })
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const addToast = useUIStore((s) => s.addToast)
   const [showPassword, setShowPassword] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setError('')
-    if (form.password !== form.confirmPassword) return setError('Passwords do not match')
-    if (form.password.length < 8) return setError('Password must be at least 8 characters')
+    if (form.password !== form.confirmPassword) return addToast('error', 'Passwords do not match')
+    if (form.password.length < 8) return addToast('error', 'Password must be at least 8 characters')
     setLoading(true)
     try {
       const data = await api('/auth/register', { method: 'POST', body: { displayName: form.displayName, username: form.username, email: form.email, password: form.password } }) as any
@@ -27,7 +27,7 @@ export default function RegisterPage() {
       setAuth(data.user, data.token)
       navigate('/dashboard')
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Registration failed')
+      addToast('error', err instanceof ApiError ? err.message : 'Registration failed')
     } finally { setLoading(false) }
   }
 
@@ -40,18 +40,12 @@ export default function RegisterPage() {
         {/* Left — form */}
         <div className="w-full lg:w-[42%] max-w-[380px]">
           <Link to="/" className="flex items-center gap-2 w-fit mb-8">
-            <div className="h-8 w-8 rounded-lg bg-accent flex items-center justify-center"><Zap className="h-4 w-4 text-white" /></div>
+            <div className="h-8 w-8 rounded-lg bg-accent flex items-center justify-center"><NairaCoinIcon className="h-4 w-4 text-white" /></div>
             <span className="text-lg font-bold tracking-tight text-dark-text">tipfy</span>
           </Link>
 
           <h1 className="text-2xl font-bold text-dark-text">Create your account</h1>
           <p className="text-sm text-gray-500 mt-1">Your tip page is one sign-up away</p>
-
-          {error && (
-            <div className="mt-4 px-3.5 py-2.5 rounded-lg bg-red-50 border border-red-200">
-              <p className="text-xs text-error">{error}</p>
-            </div>
-          )}
 
           <form onSubmit={handleSubmit} className="space-y-3 mt-6">
             <Input light label="Full name" placeholder="John Doe" leftIcon={<User className="h-4 w-4" />} value={form.displayName} onChange={update('displayName')} />
@@ -123,7 +117,7 @@ export default function RegisterPage() {
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2.5">
                           <div className="w-9 h-9 rounded-xl bg-accent flex items-center justify-center shadow-sm">
-                            <svg viewBox="0 0 24 24" className="w-4.5 h-4.5" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
+                            <svg viewBox="0 0 24 24" className="w-4.5 h-4.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="9" r="7.5" /><path d="M9.5 6h5M9.5 9h5" strokeWidth="1.8" /><path d="M10.5 6v6M13.5 6v6" strokeWidth="1.8" /><path d="M7 19.5l2.5-3h5l2.5 3" /></svg>
                           </div>
                           <div>
                             <p className="text-[13px] font-bold text-dark-text">tipfy</p>
