@@ -6,6 +6,14 @@ export const SITE = {
 
 export const PRESET_AMOUNTS = [100, 200, 500, 1000, 2000, 5000]
 
+export const TIP_CATEGORIES = [
+  { value: 'general', label: 'General' },
+  { value: 'service', label: 'Service' },
+  { value: 'content', label: 'Content' },
+  { value: 'food', label: 'Food' },
+  { value: 'music', label: 'Music' },
+] as const
+
 export const BUSINESS_CATEGORIES = [
   'Content Creator', 'Restaurant', 'Hotel', 'Salon', 'Barbershop',
   'Logistics', 'Freelancer', 'Musician', 'Artist', 'Photographer', 'NGO', 'Other',

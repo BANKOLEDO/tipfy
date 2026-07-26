@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, CreditCard, ArrowLeft, Heart, Sparkles, Shield, ArrowRight, MessageCircle } from 'lucide-react'
+import { Send, CreditCard, ArrowLeft, Heart, Sparkles, Shield, ArrowRight, MessageCircle, Tag } from 'lucide-react'
 import NairaCoinIcon from '~/components/NairaCoinIcon'
 import { api } from '~/lib/api'
 import { useUIStore } from '~/lib/store'
 import { formatNaira } from '~/lib/utils'
-import { PRESET_AMOUNTS } from '~/config/constants'
+import { PRESET_AMOUNTS, TIP_CATEGORIES } from '~/config/constants'
 
 export default function TipPage() {
   const { username } = useParams<{ username: string }>()
@@ -20,6 +20,7 @@ export default function TipPage() {
   const [senderName, setSenderName] = useState('')
   const [senderEmail, setSenderEmail] = useState('')
   const [message, setMessage] = useState('')
+  const [category, setCategory] = useState('general')
   const [processing, setProcessing] = useState(false)
   const addToast = useUIStore((s) => s.addToast)
 
@@ -42,7 +43,7 @@ export default function TipPage() {
     try {
       const res = await api<any>('/tips', {
         method: 'POST', body: {
-          recipientId: recipient.id, amount: selectedAmount, senderName: senderName || undefined, senderEmail, message: message || undefined,
+          recipientId: recipient.id, amount: selectedAmount, senderName: senderName || undefined, senderEmail, message: message || undefined, category,
         }
       })
       if (res.checkoutUrl) {
@@ -250,6 +251,22 @@ export default function TipPage() {
                           <textarea placeholder="Thanks for your work!" value={message} onChange={(e) => setMessage(e.target.value)} maxLength={200} rows={3}
                             className="w-full pl-11 pr-4 pt-3 pb-3 text-sm bg-white border-2 border-light-border rounded-2xl text-dark-text placeholder:text-text-muted/60 focus:outline-none focus:border-accent focus:ring-4 focus:ring-accent-dim transition-all resize-none" />
                           <span className="absolute bottom-3 right-4 text-[10px] text-text-muted font-medium">{message.length}/200</span>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-text-muted mb-2">What is this for?</label>
+                        <div className="grid grid-cols-5 gap-2">
+                          {TIP_CATEGORIES.map((c) => (
+                            <button key={c.value} type="button" onClick={() => setCategory(c.value)}
+                              className={`py-2.5 rounded-xl text-[11px] font-semibold text-center transition-all border-2 ${
+                                category === c.value
+                                  ? 'bg-accent text-white border-accent'
+                                  : 'bg-white text-gray-500 border-light-border hover:border-accent/30'
+                              }`}>
+                              {c.label}
+                            </button>
+                          ))}
                         </div>
                       </div>
 
