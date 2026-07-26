@@ -53,6 +53,7 @@ export const tipSchema = z.object({
     .optional()
     .or(z.literal('')),
   senderEmail: z.string().email().optional().or(z.literal('')),
+  category: z.enum(['general', 'service', 'content', 'food', 'music']).default('general'),
 })
 
 export const withdrawSchema = z.object({

@@ -25,7 +25,7 @@ router.post(
   validate(tipSchema),
   async (req, res, next) => {
     try {
-      const { recipientId, amount, message, isAnonymous, senderName, senderEmail } =
+      const { recipientId, amount, message, isAnonymous, senderName, senderEmail, category } =
         req.body
 
       const recipient = await db.user.findUnique({
@@ -52,36 +52,47 @@ router.post(
           recipientId,
           amount,
           message: message || null,
+          category: category || 'general',
           isAnonymous: isAnonymous || false,
           status: 'pending',
         },
       })
 
-      const redirectUrl = `${getEnv().FRONTEND_URL}/tip/payment-complete?ref=${reference}`
+      const env = getEnv()
+      if (!env.MONNIFY_CONTRACT_CODE) {
+        throw AppError.internal('MONNIFY_CONTRACT_CODE is not configured. Get it from your Monnify dashboard.')
+      }
 
-      const paymentResponse = await initializePayment({
-        amount,
-        customerName: isAnonymous ? 'Anonymous' : senderName || 'TipFY User',
-        customerEmail: senderEmail || `tip-${reference.toLowerCase()}@tipfy.app`,
-        transactionReference: reference,
-        paymentDescription: `Tip to ${recipient.displayName}`,
-        redirectUrl,
-        metadata: {
-          tipId: tip.id,
-          recipientId,
-          senderId: senderId || '',
-        },
-      })
+      const redirectUrl = `${env.FRONTEND_URL}/tip/payment-complete?ref=${reference}`
+
+      let paymentResponse: Awaited<ReturnType<typeof initializePayment>>
+      try {
+        paymentResponse = await initializePayment({
+          amount,
+          customerName: isAnonymous ? 'Anonymous' : senderName || 'TipFY User',
+          customerEmail: senderEmail || `tip-${reference.toLowerCase()}@tipfy.app`,
+          transactionReference: reference,
+          paymentDescription: `Tip to ${recipient.displayName}`,
+          redirectUrl,
+          metadata: {
+            tipId: tip.id,
+            recipientId,
+            senderId: senderId || '',
+          },
+        })
+      } catch (err) {
+        console.error('[TIP] Monnify error:', err)
+        await db.tip.update({ where: { id: tip.id }, data: { status: 'failed' } })
+        throw AppError.internal('Payment gateway error: ' + (err instanceof Error ? err.message : 'Unknown error'))
+      }
 
       if (!paymentResponse.requestSuccessful) {
+        console.error('[TIP] Monnify init failed:', paymentResponse.responseMessage, paymentResponse.responseCode)
         await db.tip.update({
           where: { id: tip.id },
           data: { status: 'failed' },
         })
-        throw AppError.internal(
-          'Payment initialization failed: ' +
-            paymentResponse.responseMessage
-        )
+        throw AppError.badRequest('Payment initialization failed: ' + paymentResponse.responseMessage)
       }
 
       await logAuditEvent({
@@ -103,9 +114,7 @@ router.post(
             amount: tip.amount,
             status: tip.status,
           },
-          checkoutUrl: paymentResponse.responseBody?.transactionReference
-            ? `https://checkout.monnify.com/${paymentResponse.responseBody.transactionReference}`
-            : null,
+          checkoutUrl: paymentResponse.responseBody?.checkoutUrl || null,
           monnifyReference:
             paymentResponse.responseBody?.transactionReference || null,
         },
@@ -124,8 +133,7 @@ router.get('/me', authenticate, async (req, res, next) => {
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 50)
     const status = req.query.status as string | undefined
 
-    const where: any = { recipientId: userId }
-    if (status) where.status = status
+    const where: any = { recipientId: userId, status: { not: 'failed' } }
 
     const [tips, total] = await Promise.all([
       db.tip.findMany({
@@ -141,6 +149,7 @@ router.get('/me', authenticate, async (req, res, next) => {
           recipientId: true,
           amount: true,
           message: true,
+          category: true,
           isAnonymous: true,
           status: true,
           completedAt: true,
