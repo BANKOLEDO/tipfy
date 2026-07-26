@@ -9,6 +9,7 @@ const stagger = { visible: { transition: { staggerChildren: 0.08 } } }
 
 const categories = [
   { key: 'all', label: 'All' },
+  { key: 'general', label: 'General' },
   { key: 'service', label: 'Service' },
   { key: 'content', label: 'Content' },
   { key: 'food', label: 'Food' },
@@ -161,7 +162,7 @@ export default function TipsPage() {
                     <div className="min-w-0">
                       <p className="text-sm font-semibold text-dark-text truncate">{tip.sender?.displayName || tip.senderName || 'Anonymous'}</p>
                       <p className="text-xs text-gray-400 truncate">
-                        {tip.message || tip.category || 'General'} · {timeAgo(tip.createdAt)}
+                        {tip.message || (tip.category && tip.category !== 'general' ? tip.category.charAt(0).toUpperCase() + tip.category.slice(1) : '') || 'General'} · {timeAgo(tip.createdAt)}
                       </p>
                     </div>
                   </div>
