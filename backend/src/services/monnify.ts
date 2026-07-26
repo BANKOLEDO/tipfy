@@ -68,6 +68,7 @@ export interface MonnifyPaymentResponse {
   responseBody: {
     transactionReference: string
     paymentReference: string
+    checkoutUrl?: string
     amount: number
     transactionDate: string
     paymentMethod: string
@@ -112,6 +113,22 @@ export async function initializePayment(
   const token = await getAccessToken()
   const env = getEnv()
 
+  const body: Record<string, unknown> = {
+    amount: data.amount,
+    customerName: data.customerName,
+    customerEmail: data.customerEmail,
+    paymentReference: data.transactionReference,
+    paymentDescription: data.paymentDescription,
+    currencyCode: 'NGN',
+    contractCode: env.MONNIFY_CONTRACT_CODE,
+    paymentMethods: ['CARD', 'ACCOUNT_TRANSFER', 'USSD'],
+    redirectUrl: data.redirectUrl,
+  }
+
+  if (data.metadata && Object.keys(data.metadata).length > 0) {
+    body.metaData = data.metadata
+  }
+
   const response = await fetch(
     `${MONNIFY_BASE_URL}/api/v1/merchant/transactions/init-transaction`,
     {
@@ -120,18 +137,7 @@ export async function initializePayment(
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        amount: data.amount,
-        customerName: data.customerName,
-        customerEmail: data.customerEmail,
-        transactionReference: data.transactionReference,
-        paymentDescription: data.paymentDescription,
-        currencyCode: 'NGN',
-        contractCode: env.MONNIFY_CONTRACT_CODE,
-        paymentMethods: ['CARD', 'BANK_TRANSFER', 'USSD'],
-        redirectUrl: data.redirectUrl,
-        metadata: data.metadata,
-      }),
+      body: JSON.stringify(body),
     }
   )
 
