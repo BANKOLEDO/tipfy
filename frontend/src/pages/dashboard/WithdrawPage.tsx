@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { ArrowUpRight, Clock, CheckCircle, XCircle, Building2 } from 'lucide-react'
+import { ArrowUpRight, Clock, CheckCircle, XCircle, Building2, Loader2 } from 'lucide-react'
 import { api, ApiError } from '~/lib/api'
 import { useAuthStore, useUIStore } from '~/lib/store'
 import { formatNaira, timeAgo } from '~/lib/utils'
@@ -69,7 +69,7 @@ export default function WithdrawPage() {
     } finally { setLoading(false) }
   }
 
-  const statusIcon = (s: string) => s === 'completed' ? <CheckCircle className="h-4 w-4 text-emerald-500" /> : s === 'pending' ? <Clock className="h-4 w-4 text-amber-500" /> : <XCircle className="h-4 w-4 text-red-500" />
+  const statusIcon = (s: string) => s === 'completed' ? <CheckCircle className="h-4 w-4 text-emerald-500" /> : s === 'processing' ? <Loader2 className="h-4 w-4 text-blue-500 animate-spin" /> : s === 'pending' ? <Clock className="h-4 w-4 text-amber-500" /> : <XCircle className="h-4 w-4 text-red-500" />
   const inputClass = "w-full h-12 px-4 text-sm bg-gray-50 border-2 border-gray-100 rounded-2xl text-dark-text placeholder:text-gray-400 focus:outline-none focus:border-accent focus:ring-4 focus:ring-accent/10 transition-all"
 
   return (
@@ -176,6 +176,7 @@ export default function WithdrawPage() {
                     </div>
                     <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wide ${
                       w.status === 'completed' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' :
+                      w.status === 'processing' ? 'bg-blue-50 text-blue-600 border border-blue-100' :
                       w.status === 'pending' ? 'bg-amber-50 text-amber-600 border border-amber-100' :
                       'bg-red-50 text-red-600 border border-red-100'
                     }`}>{w.status}</span>

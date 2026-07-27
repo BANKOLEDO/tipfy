@@ -8,6 +8,7 @@ const envSchema = z.object({
   JWT_EXPIRES_IN: z.string().default('7d'),
   BCRYPT_ROUNDS: z.coerce.number().min(10).default(12),
   FRONTEND_URL: z.string().url(),
+  ADMIN_URL: z.string().url(),
   MONNIFY_API_KEY: z.string().min(1, 'MONNIFY_API_KEY is required'),
   MONNIFY_SECRET_KEY: z.string().min(1, 'MONNIFY_SECRET_KEY is required'),
   MONNIFY_CONTRACT_CODE: z.string().optional().default(''),
@@ -19,6 +20,7 @@ const envSchema = z.object({
   ENCRYPTION_IV: z.string().min(16),
   RESEND_API_KEY: z.string().optional(),
   LOG_LEVEL: z.enum(['dev', 'prod', 'combined']).default('dev'),
+  ADMIN_EMAIL: z.string().optional(),
 })
 
 type Env = z.infer<typeof envSchema>

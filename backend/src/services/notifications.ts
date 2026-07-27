@@ -1,7 +1,7 @@
 import { db } from '~/lib/db'
 import type { Prisma } from '@prisma/client'
 
-type NotificationType = 'tip_received' | 'tip_failed' | 'withdrawal_completed' | 'withdrawal_failed' | 'team_joined' | 'team_removed' | 'feedback_received'
+type NotificationType = 'tip_received' | 'tip_failed' | 'withdrawal_completed' | 'withdrawal_processing' | 'withdrawal_failed' | 'team_joined' | 'team_removed' | 'feedback_received'
 
 interface CreateNotification {
   userId: string
@@ -55,6 +55,17 @@ export async function notifyWithdrawalCompleted(userId: string, amount: number) 
     type: 'withdrawal_completed',
     title: 'Withdrawal complete',
     body: `₦${amount.toLocaleString()} has been sent to your bank account.`,
+    link: '/dashboard/withdraw',
+    data: { amount },
+  })
+}
+
+export async function notifyWithdrawalProcessing(userId: string, amount: number) {
+  return createNotification({
+    userId,
+    type: 'withdrawal_processing',
+    title: 'Withdrawal processing',
+    body: `Your ₦${amount.toLocaleString()} withdrawal is being processed.`,
     link: '/dashboard/withdraw',
     data: { amount },
   })

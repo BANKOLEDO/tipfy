@@ -7,7 +7,7 @@ import { validate } from '~/middleware/validate'
 import { authenticate } from '~/middleware/auth'
 import { logAuditEvent, AuditActions } from '~/lib/audit'
 import { initiateDisbursement, verifyWebhookSignature } from '~/services/monnify'
-import { notifyWithdrawalCompleted, notifyWithdrawalFailed } from '~/services/notifications'
+import { notifyWithdrawalCompleted, notifyWithdrawalProcessing, notifyWithdrawalFailed } from '~/services/notifications'
 
 const router = Router()
 
@@ -109,7 +109,6 @@ router.post(
         '057': 'Zenith Bank',
         '011': 'First Bank of Nigeria',
         '070': 'Guaranty Trust Bank',
-        '058': 'Guaranty Trust Bank',
         '214': 'First City Monument Bank',
         '032': 'Union Bank',
         '035': 'Wema Bank',
@@ -168,6 +167,8 @@ router.post(
         })
       })
 
+      let finalStatus = withdrawal.status
+
       // Initiate disbursement
       try {
         const disbursement = await initiateDisbursement({
@@ -187,7 +188,8 @@ router.post(
               monnifyResponse: disbursement as any,
             },
           })
-          await notifyWithdrawalCompleted(userId, amount)
+          finalStatus = 'processing'
+          await notifyWithdrawalProcessing(userId, amount)
         } else {
           // Refund balance on failure
           await db.user.update({
@@ -202,6 +204,7 @@ router.post(
               failureReason: disbursement.responseMessage,
             },
           })
+          finalStatus = 'failed'
           await notifyWithdrawalFailed(userId, amount, disbursement.responseMessage)
         }
       } catch (err) {
@@ -218,6 +221,7 @@ router.post(
             failureReason: err instanceof Error ? err.message : 'Disbursement service error',
           },
         })
+        finalStatus = 'failed'
 
         await notifyWithdrawalFailed(userId, amount, 'Disbursement service unavailable')
       }
@@ -238,7 +242,7 @@ router.post(
             id: withdrawal.id,
             reference: withdrawal.reference,
             amount: Number(withdrawal.amount),
-            status: withdrawal.status,
+            status: finalStatus,
           },
         },
       })

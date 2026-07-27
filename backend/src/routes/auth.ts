@@ -58,6 +58,7 @@ router.post(
         userId: user.id,
         email: user.email,
         username: user.username,
+        role: 'user',
       })
 
       const tokenHash = hashToken(token)
@@ -115,6 +116,7 @@ router.post(
           passwordHash: true,
           isBusiness: true,
           isActive: true,
+          role: true,
         },
       })
 
@@ -135,10 +137,24 @@ router.post(
         userId: user.id,
         email: user.email,
         username: user.username,
+        role: user.role,
       })
 
-      const tokenHash = hashToken(token)
       const env = getEnv()
+
+      // Auto-promote admin if email matches ADMIN_EMAIL env
+      let userRole = user.role
+      if (env.ADMIN_EMAIL && user.email === env.ADMIN_EMAIL && user.role !== 'admin') {
+        await db.user.update({ where: { id: user.id }, data: { role: 'admin' } })
+        userRole = 'admin'
+      }
+
+      // Re-issue token with correct role if promoted
+      const finalToken = userRole !== user.role
+        ? await createToken({ userId: user.id, email: user.email, username: user.username, role: userRole })
+        : token
+
+      const tokenHash = hashToken(finalToken)
 
       await db.session.create({
         data: {
@@ -169,13 +185,14 @@ router.post(
       res.json({
         success: true,
         data: {
-          token,
+          token: finalToken,
           user: {
             id: user.id,
             email: user.email,
             username: user.username,
             displayName: user.displayName,
             isBusiness: user.isBusiness,
+            role: userRole,
           },
         },
       })
@@ -239,6 +256,7 @@ router.get('/me', async (req, res, next) => {
         totalAmount: true,
         rating: true,
         isVerified: true,
+        role: true,
         createdAt: true,
       },
     })

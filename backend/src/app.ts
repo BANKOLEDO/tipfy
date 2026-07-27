@@ -14,6 +14,7 @@ import userRoutes from '~/routes/users'
 import withdrawalRoutes from '~/routes/withdrawals'
 import teamRoutes from '~/routes/teams'
 import notificationRoutes from '~/routes/notifications'
+import adminRoutes from '~/routes/admin'
 
 export function createApp() {
   const env = getEnv()
@@ -81,6 +82,7 @@ export function createApp() {
   app.use(`${apiPrefix}/withdrawals`, withdrawalRoutes)
   app.use(`${apiPrefix}/teams`, teamRoutes)
   app.use(`${apiPrefix}/notifications`, notificationRoutes)
+  app.use(`${apiPrefix}/admin`, adminRoutes)
 
   app.use(notFoundHandler)
   app.use(errorHandler)
