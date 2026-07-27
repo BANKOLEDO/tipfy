@@ -12,7 +12,8 @@
     "db:migrate": "cross-env NODE_OPTIONS=\"--dns-result-order=ipv4first\" prisma migrate dev",
     "db:push": "cross-env NODE_OPTIONS=\"--dns-result-order=ipv4first\" prisma db push",
     "db:seed": "cross-env NODE_OPTIONS=\"--dns-result-order=ipv4first\" tsx prisma/seed.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",
