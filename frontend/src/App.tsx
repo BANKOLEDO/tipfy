@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from '~/lib/store'
 import ScrollToTop from '~/components/ScrollToTop'
@@ -42,10 +42,18 @@ function Loading() {
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
+  const initializing = useAuthStore((s) => s.initializing)
+  if (initializing) return <Loading />
   return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />
 }
 
 export default function App() {
+  const hydrateAuth = useAuthStore((s) => s.hydrateAuth)
+
+  useEffect(() => {
+    hydrateAuth()
+  }, [hydrateAuth])
+
   return (
     <BrowserRouter>
       <ScrollToTop />

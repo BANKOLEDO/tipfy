@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { api } from '~/lib/api'
 
 export interface User {
   id: string
@@ -14,6 +15,7 @@ export interface User {
   totalTipsReceived: number
   totalAmount: number
   rating: number
+  hasWithdrawalPin?: boolean
   isVerified: boolean
   role: string
   createdAt: string
@@ -23,25 +25,47 @@ interface AuthState {
   user: User | null
   token: string | null
   isAuthenticated: boolean
+  initializing: boolean
   setAuth: (user: User, token: string) => void
   clearAuth: () => void
   updateUser: (user: Partial<User>) => void
+  hydrateAuth: () => Promise<void>
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   token: null,
   isAuthenticated: false,
+  initializing: true,
   setAuth: (user, token) => {
     localStorage.setItem('tipfy_token', token)
-    set({ user, token, isAuthenticated: true })
+    set({ user, token, isAuthenticated: true, initializing: false })
   },
   clearAuth: () => {
     localStorage.removeItem('tipfy_token')
-    set({ user: null, token: null, isAuthenticated: false })
+    set({ user: null, token: null, isAuthenticated: false, initializing: false })
   },
   updateUser: (partial) =>
     set((s) => ({ user: s.user ? { ...s.user, ...partial } : null })),
+  hydrateAuth: async () => {
+    const token = localStorage.getItem('tipfy_token')
+    if (!token) {
+      set({ user: null, token: null, isAuthenticated: false, initializing: false })
+      return
+    }
+    try {
+      const data = await api<{ user: User | null }>('/auth/me')
+      if (data?.user) {
+        set({ user: data.user, token, isAuthenticated: true, initializing: false })
+      } else {
+        localStorage.removeItem('tipfy_token')
+        set({ user: null, token: null, isAuthenticated: false, initializing: false })
+      }
+    } catch {
+      localStorage.removeItem('tipfy_token')
+      set({ user: null, token: null, isAuthenticated: false, initializing: false })
+    }
+  },
 }))
 
 export interface Toast {

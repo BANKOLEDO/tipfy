@@ -69,7 +69,7 @@ export default function TeamPage() {
   const addToast = useUIStore((s) => s.addToast)
 
   useEffect(() => {
-    api<any>('/teams').then((data) => setTeams(Array.isArray(data) ? data : data.teams || [])).catch(() => {})
+    api<any>('/teams').then((data) => setTeams(Array.isArray(data) ? data : data.team || [])).catch(() => {})
   }, [])
 
   const handleAdd = async (e: React.FormEvent) => {
@@ -79,7 +79,7 @@ export default function TeamPage() {
       await api('/teams', { method: 'POST', body: { username } })
       addToast('success', 'Member added!')
       setUsername('')
-    api<any>('/teams').then((data) => setTeams(Array.isArray(data) ? data : data.teams || [])).catch(() => {})
+    api<any>('/teams').then((data) => setTeams(Array.isArray(data) ? data : data.team || [])).catch(() => {})
     } catch (err) {
       addToast('error', err instanceof ApiError ? err.message : 'Failed')
     } finally { setLoading(false) }

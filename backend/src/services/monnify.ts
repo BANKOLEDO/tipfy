@@ -107,6 +107,32 @@ export interface MonnifyDisbursementResponse {
   }
 }
 
+export interface MonnifyAccountValidationResponse {
+  requestSuccessful: boolean
+  responseMessage: string
+  responseCode: string
+  responseBody: {
+    accountNumber: string
+    accountName: string
+    bankCode: string
+  }
+}
+
+export interface MonnifyDisbursementStatusResponse {
+  requestSuccessful: boolean
+  responseMessage: string
+  responseBody?: {
+    content?: Array<{
+      reference: string
+      amount: number
+      status: string
+      responseMessage?: string
+      dateCreated?: string
+    }>
+    totalElements?: number
+  }
+}
+
 export async function initializePayment(
   data: InitializePaymentInput
 ): Promise<MonnifyPaymentResponse> {
@@ -121,7 +147,7 @@ export async function initializePayment(
     paymentDescription: data.paymentDescription,
     currencyCode: 'NGN',
     contractCode: env.MONNIFY_CONTRACT_CODE,
-    paymentMethods: ['CARD', 'ACCOUNT_TRANSFER', 'USSD'],
+    paymentMethods: env.MONNIFY_PAYMENT_METHODS.split(',').map((m) => m.trim()).filter(Boolean),
     redirectUrl: data.redirectUrl,
   }
 
@@ -149,8 +175,11 @@ export async function verifyTransaction(
 ): Promise<MonnifyPaymentResponse> {
   const token = await getAccessToken()
 
+  // We initiate payments with our own reference as the `paymentReference`,
+  // so verify using that (Monnify's `transactionReference` is generated
+  // server-side and unknown to us).
   const response = await fetch(
-    `${MONNIFY_BASE_URL}/api/v1/merchant/transactions/query?transactionReference=${encodeURIComponent(reference)}`,
+    `${MONNIFY_BASE_URL}/api/v1/merchant/transactions/query?paymentReference=${encodeURIComponent(reference)}`,
     {
       method: 'GET',
       headers: {
@@ -163,6 +192,26 @@ export async function verifyTransaction(
   return (await response.json()) as MonnifyPaymentResponse
 }
 
+export async function validateAccount(
+  bankCode: string,
+  accountNumber: string
+): Promise<MonnifyAccountValidationResponse> {
+  const token = await getAccessToken()
+
+  const response = await fetch(
+    `${MONNIFY_BASE_URL}/api/v2/disbursements/account/validate?accountNumber=${encodeURIComponent(accountNumber)}&bankCode=${encodeURIComponent(bankCode)}`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  )
+
+  return (await response.json()) as MonnifyAccountValidationResponse
+}
+
 export async function initiateDisbursement(data: {
   amount: number
   bankCode: string
@@ -172,6 +221,14 @@ export async function initiateDisbursement(data: {
   narration?: string
 }): Promise<MonnifyDisbursementResponse> {
   const token = await getAccessToken()
+  const env = getEnv()
+
+  const sourceAccountNumber = env.MONNIFY_WALLET_ACCOUNT_NUMBER
+  if (!sourceAccountNumber) {
+    throw new Error(
+      'MONNIFY_WALLET_ACCOUNT_NUMBER is not set. Copy your WALLET ACCOUNT NUMBER from the Monnify dashboard (Disbursements page).'
+    )
+  }
 
   const response = await fetch(
     `${MONNIFY_BASE_URL}/api/v2/disbursements/single`,
@@ -183,16 +240,37 @@ export async function initiateDisbursement(data: {
       },
       body: JSON.stringify({
         amount: data.amount,
-        bankCode: data.bankCode,
-        accountNumber: data.accountNumber,
-        accountName: data.accountName,
         reference: data.reference,
         narration: data.narration || 'TipFY Withdrawal',
+        destinationBankCode: data.bankCode,
+        destinationAccountNumber: data.accountNumber,
+        destinationAccountName: data.accountName,
+        sourceAccountNumber,
+        currency: 'NGN',
       }),
     }
   )
 
   return (await response.json()) as MonnifyDisbursementResponse
+}
+
+export async function getDisbursementStatus(
+  reference: string
+): Promise<MonnifyDisbursementStatusResponse> {
+  const token = await getAccessToken()
+
+  const response = await fetch(
+    `${MONNIFY_BASE_URL}/api/v2/disbursements/search?page=0&size=10&searchTerm=${encodeURIComponent(reference)}`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  )
+
+  return (await response.json()) as MonnifyDisbursementStatusResponse
 }
 
 export function verifyWebhookSignature(
@@ -202,12 +280,18 @@ export function verifyWebhookSignature(
   if (!signature) return false
   const env = getEnv()
   const secret = env.MONNIFY_WEBHOOK_SECRET
+  if (!secret) return false
+
   const expected = crypto
     .createHmac('sha512', secret)
     .update(payload)
     .digest('hex')
-  return crypto.timingSafeEqual(
-    Buffer.from(signature),
-    Buffer.from(expected)
-  )
+
+  // timingSafeEqual throws on length mismatch — normalize lengths first
+  // so malformed signatures fail cleanly instead of 500ing.
+  const sigBuf = Buffer.from(signature)
+  const expBuf = Buffer.from(expected)
+  if (sigBuf.length !== expBuf.length) return false
+
+  return crypto.timingSafeEqual(sigBuf, expBuf)
 }

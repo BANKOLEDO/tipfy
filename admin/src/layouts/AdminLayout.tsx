@@ -107,8 +107,9 @@ function TopNav({ onMenuClick }: { onMenuClick: () => void }) {
 
 export default function AdminLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const { isAuthenticated } = useAuthStore()
+  const { isAuthenticated, initializing } = useAuthStore()
 
+  if (initializing) return null
   if (!isAuthenticated) return <Navigate to="/admin/login" replace />
 
   return (

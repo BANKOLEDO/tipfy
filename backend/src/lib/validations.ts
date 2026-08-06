@@ -66,6 +66,34 @@ export const withdrawSchema = z.object({
     .string()
     .length(10, 'Account number must be 10 digits')
     .regex(/^\d+$/, 'Account number must be numeric'),
+  pin: z
+    .string()
+    .length(4, 'PIN must be 4 digits')
+    .regex(/^\d{4}$/, 'PIN must be 4 digits'),
+})
+
+export const setWithdrawalPinSchema = z.object({
+  otp: z
+    .string()
+    .length(6, 'OTP must be 6 digits')
+    .regex(/^\d{6}$/, 'OTP must be 6 digits'),
+  pin: z
+    .string()
+    .length(4, 'PIN must be 4 digits')
+    .regex(/^\d{4}$/, 'PIN must be 4 digits'),
+})
+
+export const accountValidateSchema = z.object({
+  bankCode: z.string().min(1, 'Select a bank'),
+  accountNumber: z
+    .string()
+    .length(10, 'Account number must be 10 digits')
+    .regex(/^\d+$/, 'Account number must be digits only'),
+})
+
+export const tipFeeQuoteSchema = z.object({
+  recipientId: z.string().min(1, 'Recipient is required'),
+  amount: z.coerce.number().min(1, 'Amount must be at least ₦1').max(10000000, 'Amount too large'),
 })
 
 export const profileSchema = z.object({
@@ -140,6 +168,8 @@ export type LoginInput = z.infer<typeof loginSchema>
 export type RegisterInput = z.infer<typeof registerSchema>
 export type TipInput = z.infer<typeof tipSchema>
 export type WithdrawInput = z.infer<typeof withdrawSchema>
+export type SetWithdrawalPinInput = z.infer<typeof setWithdrawalPinSchema>
+export type TipFeeQuoteInput = z.infer<typeof tipFeeQuoteSchema>
 export type ProfileInput = z.infer<typeof profileSchema>
 export type FeedbackInput = z.infer<typeof feedbackSchema>
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>

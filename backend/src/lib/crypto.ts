@@ -1,4 +1,10 @@
-import { createHash, randomBytes, createCipheriv, createDecipheriv } from 'crypto'
+import {
+  createHash,
+  randomBytes,
+  randomInt,
+  createCipheriv,
+  createDecipheriv,
+} from 'crypto'
 import { getEnv } from '~/config/env'
 
 export function hashToken(token: string): string {
@@ -50,7 +56,7 @@ export function sanitizeInput(input: string): string {
 export function generateOTP(length: number = 6): string {
   let otp = ''
   for (let i = 0; i < length; i++) {
-    otp += Math.floor(Math.random() * 10).toString()
+    otp += randomInt(0, 10).toString()
   }
   return otp
 }

@@ -31,6 +31,8 @@ router.get('/stats', async (_req, res, next) => {
       processingWithdrawals,
       failedWithdrawals,
       activeUsers,
+      platformFees,
+      withdrawalFees,
     ] = await Promise.all([
       db.user.count(),
       db.user.count({ where: { createdAt: { gte: yesterday } } }),
@@ -45,10 +47,14 @@ router.get('/stats', async (_req, res, next) => {
       db.withdrawal.count({ where: { status: 'processing' } }),
       db.withdrawal.count({ where: { status: 'failed' } }),
       db.user.count({ where: { lastLoginAt: { gte: sevenDaysAgo } } }),
+      db.tip.aggregate({ where: { status: 'completed' }, _sum: { platformFee: true } }),
+      db.withdrawal.aggregate({ where: { status: { in: ['completed', 'processing'] } }, _sum: { fee: true } }),
     ])
 
     const totalRevenue = Number(totalTipVolume._sum.amount || 0)
     const revenueToday = Number(tipVolumeToday._sum.amount || 0)
+    const platformRevenue = Number(platformFees._sum.platformFee || 0)
+    const withdrawalRevenue = Number(withdrawalFees._sum.fee || 0)
 
     res.json({
       success: true,
@@ -56,6 +62,7 @@ router.get('/stats', async (_req, res, next) => {
         users: { total: totalUsers, newToday: newUsersToday, new7d: newUsers7d, active7d: activeUsers },
         tips: { total: totalTips, today: tipsToday, new7d: tips7d, totalVolume: totalRevenue, volumeToday: revenueToday },
         withdrawals: { total: totalWithdrawals, pending: pendingWithdrawals, processing: processingWithdrawals, failed: failedWithdrawals },
+        revenue: { platform: platformRevenue, withdrawalFees: withdrawalRevenue, total: platformRevenue + withdrawalRevenue },
       },
     })
   } catch (error) {
@@ -301,6 +308,7 @@ router.get('/tips', async (req, res, next) => {
         where,
         select: {
           id: true, reference: true, amount: true, status: true, category: true,
+          platformFee: true, netAmount: true, totalCharged: true,
           senderName: true, message: true, isAnonymous: true,
           paymentMethod: true, completedAt: true, createdAt: true,
           recipient: { select: { id: true, username: true, displayName: true } },
@@ -316,7 +324,11 @@ router.get('/tips', async (req, res, next) => {
       success: true,
       data: {
         tips: tips.map(t => ({
-          ...t, amount: Number(t.amount),
+          ...t,
+          amount: Number(t.amount),
+          platformFee: Number(t.platformFee || 0),
+          netAmount: Number(t.netAmount || 0),
+          totalCharged: Number(t.totalCharged || 0),
           recipientName: t.isAnonymous ? 'Anonymous' : (t.sender?.displayName || t.senderName || 'Unknown'),
         })),
         pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
@@ -350,7 +362,8 @@ router.get('/withdrawals', async (req, res, next) => {
       db.withdrawal.findMany({
         where,
         select: {
-          id: true, amount: true, bankCode: true, bankName: true,
+          id: true, amount: true, fee: true, netAmount: true, estimatedTax: true,
+          bankCode: true, bankName: true,
           accountNumber: true, accountName: true, reference: true,
           status: true, failureReason: true, processedAt: true, createdAt: true,
           user: { select: { id: true, username: true, displayName: true, email: true } },
@@ -365,7 +378,11 @@ router.get('/withdrawals', async (req, res, next) => {
       success: true,
       data: {
         withdrawals: withdrawals.map(w => ({
-          ...w, amount: Number(w.amount),
+          ...w,
+          amount: Number(w.amount),
+          fee: Number(w.fee || 0),
+          netAmount: Number(w.netAmount || 0),
+          estimatedTax: Number(w.estimatedTax || 0),
           accountNumber: w.accountNumber.slice(0, 3) + '****' + w.accountNumber.slice(-3),
         })),
         pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },

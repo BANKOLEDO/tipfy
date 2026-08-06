@@ -24,9 +24,12 @@ model User {
   totalTipsReceived Int      @default(0) @map("total_tips_received")
   totalAmount       Decimal  @default(0) @db.Decimal(12, 2) @map("total_amount")
   rating            Decimal  @default(0) @db.Decimal(3, 2)
+  withdrawalPinHash String?  @map("withdrawal_pin_hash")
   isVerified        Boolean  @default(false) @map("is_verified")
   isActive          Boolean  @default(true) @map("is_active")
   role              String   @default("user")
+  plan              String   @default("free")
+  planExpiresAt     DateTime? @map("plan_expires_at")
   lastLoginAt       DateTime? @map("last_login_at")
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
@@ -42,8 +45,26 @@ model User {
   auditLogs       AuditLog[]
   sessions        Session[]
   passwordResetTokens PasswordResetToken[]
+  otps            Otp[]
 
   @@map("users")
+}
+
+model Otp {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  otpHash   String   @map("otp_hash")
+  purpose   String   @default("withdrawal_pin")
+  attempts  Int      @default(0)
+  expiresAt DateTime @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([otpHash])
+  @@map("otps")
 }
 
 model Session {
@@ -85,6 +106,10 @@ model Tip {
   senderName       String?  @map("sender_name")
   recipientId      String   @map("recipient_id")
   amount           Decimal  @db.Decimal(12, 2)
+  platformFee      Decimal  @default(0) @db.Decimal(12, 2) @map("platform_fee")
+  processingFee    Decimal  @default(0) @db.Decimal(12, 2) @map("processing_fee")
+  netAmount        Decimal  @default(0) @db.Decimal(12, 2) @map("net_amount")
+  totalCharged     Decimal  @default(0) @db.Decimal(12, 2) @map("total_charged")
   currency         String   @default("NGN")
   message          String?
   category         String   @default("general")
@@ -129,6 +154,9 @@ model Withdrawal {
   id              String   @id @default(cuid())
   userId          String   @map("user_id")
   amount          Decimal  @db.Decimal(12, 2)
+  fee             Decimal  @default(0) @db.Decimal(12, 2)
+  netAmount       Decimal  @default(0) @db.Decimal(12, 2) @map("net_amount")
+  estimatedTax    Decimal  @default(0) @db.Decimal(12, 2) @map("estimated_tax")
   bankCode        String   @map("bank_code")
   bankName        String   @map("bank_name")
   accountNumber   String   @map("account_number")
@@ -136,9 +164,10 @@ model Withdrawal {
   reference       String   @unique
   status          String   @default("pending")
   monnifyResponse Json?    @map("monnify_response")
-  processedAt     DateTime? @map("processed_at")
-  failureReason   String?  @map("failure_reason")
-  createdAt       DateTime @default(now()) @map("created_at")
+    processedAt     DateTime? @map("processed_at")
+    failureReason   String?  @map("failure_reason")
+    createdAt       DateTime @default(now()) @map("created_at")
+    updatedAt       DateTime @updatedAt @default(now()) @map("updated_at")
 
   user User @relation(fields: [userId], references: [id])
 

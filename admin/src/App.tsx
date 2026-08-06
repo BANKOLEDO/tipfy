@@ -1,7 +1,6 @@
 import { lazy, Suspense, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from '~/lib/store'
-import { api } from '~/lib/api'
 import ToastContainer from '~/components/ToastContainer'
 
 const AdminLayout = lazy(() => import('~/layouts/AdminLayout'))
@@ -25,18 +24,11 @@ function Loading() {
 }
 
 export default function App() {
-  const { setAuth, isAuthenticated } = useAuthStore()
+  const hydrateAuth = useAuthStore((s) => s.hydrateAuth)
 
   useEffect(() => {
-    if (isAuthenticated) {
-      api<{ user: any }>('/auth/me').then(({ user }) => {
-        if (user && (user.role === 'admin' || user.role === 'support')) {
-          const token = localStorage.getItem('tipfy_admin_token') || ''
-          setAuth(user, token)
-        }
-      }).catch(() => {})
-    }
-  }, [])
+    hydrateAuth()
+  }, [hydrateAuth])
 
   return (
     <BrowserRouter>

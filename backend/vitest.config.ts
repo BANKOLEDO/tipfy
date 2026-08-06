@@ -11,6 +11,10 @@ export default defineConfig({
     globals: true,
     testTimeout: 15000,
     hookTimeout: 30000,
+    // Test files share the same live Neon DB and each file wipes all 'test+'
+    // rows in afterAll — run files serially so they can't delete each other's
+    // in-flight data.
+    fileParallelism: false,
     setupFiles: [resolve(__dirname, 'src/__tests__/setup.ts')],
   },
 })

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
-import { ArrowUpRight, Share2, Check, ArrowDownLeft, TrendingUp, Star, Users, Wallet, Send, Copy } from 'lucide-react'
+import { ArrowUpRight, Share2, Check, ArrowDownLeft, TrendingUp, Star, Wallet, Send, Copy } from 'lucide-react'
 import { api } from '~/lib/api'
 import { useAuthStore } from '~/lib/store'
 import { formatNaira, timeAgo } from '~/lib/utils'
@@ -186,7 +186,7 @@ function MoneyBag3D() {
 }
 
 export default function Dashboard() {
-  const { user } = useAuthStore()
+  const { user, updateUser } = useAuthStore()
   const [recentTips, setRecentTips] = useState<any[]>([])
   const [copied, setCopied] = useState(false)
 
@@ -197,6 +197,10 @@ export default function Dashboard() {
     }).catch(() => {
       setRecentTips([])
     })
+
+    api<any>('/auth/me').then((data) => {
+      if (data?.user) updateUser(data.user)
+    }).catch(() => {})
   }, [])
 
   const copyLink = () => {
@@ -244,12 +248,11 @@ export default function Dashboard() {
       </motion.div>
 
       {/* Stats */}
-      <motion.div variants={fadeUp} className="grid grid-cols-4 gap-3">
+      <motion.div variants={fadeUp} className="grid grid-cols-3 gap-3">
         {[
-          { label: 'Tips', value: user?.totalTipsReceived || 0, icon: ArrowDownLeft, bg: 'from-blue-500 to-blue-600', shadow: 'shadow-blue-500/25' },
-          { label: 'Earned', value: formatNaira(user?.totalAmount || 0), icon: TrendingUp, bg: 'from-emerald-500 to-emerald-600', shadow: 'shadow-emerald-500/25' },
-          { label: 'Rating', value: `${(user?.rating || 0).toFixed(1)}`, icon: Star, bg: 'from-amber-500 to-amber-600', shadow: 'shadow-amber-500/25' },
-          { label: 'Followers', value: 0, icon: Users, bg: 'from-purple-500 to-purple-600', shadow: 'shadow-purple-500/25' },
+          { label: 'Tips', value: Number(user?.totalTipsReceived || 0), icon: ArrowDownLeft, bg: 'from-blue-500 to-blue-600', shadow: 'shadow-blue-500/25' },
+          { label: 'Earned', value: formatNaira(Number(user?.totalAmount || 0)), icon: TrendingUp, bg: 'from-emerald-500 to-emerald-600', shadow: 'shadow-emerald-500/25' },
+          { label: 'Rating', value: `${Number(user?.rating || 0).toFixed(1)}`, icon: Star, bg: 'from-amber-500 to-amber-600', shadow: 'shadow-amber-500/25' },
         ].map((s) => (
           <motion.div key={s.label} whileHover={{ y: -2 }} transition={{ type: 'spring', stiffness: 400, damping: 25 }}
             className={`relative overflow-hidden rounded-2xl bg-gradient-to-br ${s.bg} p-4 text-white shadow-lg ${s.shadow} cursor-default`}>

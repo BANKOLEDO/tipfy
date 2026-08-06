@@ -50,7 +50,8 @@ export async function registerUser(
     ...overrides,
   }
   const res = await request.post('/api/v1/auth/register').send(data)
-  return { ...res, userData: data }
+  // res.body is a getter that a plain spread would drop — preserve it.
+  return { ...res, body: res.body, userData: data }
 }
 
 export async function loginUser(

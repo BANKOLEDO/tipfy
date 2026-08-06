@@ -1,6 +1,8 @@
 import type { Request, Response, NextFunction } from 'express'
 import { verifyTokenAsync, type JWTPayload } from '~/lib/jwt'
 import { AppError } from '~/lib/errors'
+import { db } from '~/lib/db'
+import { hashToken } from '~/lib/crypto'
 
 declare global {
   namespace Express {
@@ -8,6 +10,27 @@ declare global {
       user?: JWTPayload
     }
   }
+}
+
+async function resolveLiveSession(req: Request, token: string) {
+  const payload = await verifyTokenAsync(token)
+
+  const [session, user] = await Promise.all([
+    db.session.findUnique({ where: { tokenHash: hashToken(token) } }),
+    db.user.findUnique({
+      where: { id: payload.userId },
+      select: { id: true, isActive: true },
+    }),
+  ])
+
+  if (!session || session.expiresAt <= new Date()) {
+    return null
+  }
+  if (!user || !user.isActive) {
+    return null
+  }
+
+  return payload
 }
 
 export async function authenticate(
@@ -30,7 +53,11 @@ export async function authenticate(
       return next(AppError.unauthorized('Invalid token format'))
     }
 
-    const payload = await verifyTokenAsync(token)
+    const payload = await resolveLiveSession(req, token)
+    if (!payload) {
+      return next(AppError.unauthorized('Session expired, please log in again'))
+    }
+
     req.user = payload
     next()
   } catch {
@@ -47,8 +74,10 @@ export async function optionalAuth(
     const authHeader = req.headers.authorization
     if (authHeader?.startsWith('Bearer ')) {
       const token = authHeader.slice(7)
-      const payload = await verifyTokenAsync(token)
-      req.user = payload
+      const payload = await resolveLiveSession(req, token)
+      if (payload) {
+        req.user = payload
+      }
     }
   } catch {
     // Token invalid, continue without auth

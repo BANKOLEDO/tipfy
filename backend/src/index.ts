@@ -6,11 +6,16 @@ dns.setServers(['8.8.8.8', '8.8.4.4'])
 
 import { createApp } from '~/app'
 import { getEnv } from '~/config/env'
+import { startPendingTipReaper } from '~/jobs/expirePendingTips'
+import { startWithdrawalReaper } from '~/jobs/resolveStuckWithdrawals'
 
 const env = getEnv()
 const app = createApp()
 
 const PORT = env.PORT
+
+startPendingTipReaper()
+startWithdrawalReaper()
 
 app.listen(PORT, () => {
   console.log(`🚀 TipFY API running on port ${PORT}`)

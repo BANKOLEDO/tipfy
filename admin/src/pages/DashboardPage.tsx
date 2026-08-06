@@ -9,6 +9,7 @@ interface Stats {
   users: { total: number; newToday: number; new7d: number; active7d: number }
   tips: { total: number; today: number; new7d: number; totalVolume: number; volumeToday: number }
   withdrawals: { total: number; pending: number; processing: number; failed: number }
+  revenue?: { platform: number; withdrawalFees: number; total: number }
 }
 
 const fadeUp = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }
@@ -51,6 +52,28 @@ export default function DashboardPage() {
           </motion.div>
         ))}
       </motion.div>
+
+      {/* Revenue */}
+      {stats?.revenue && (
+        <motion.div variants={fadeUp} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {[
+            { label: 'Platform Revenue', value: formatNaira(stats.revenue.platform), sub: 'TipFY commission on completed tips', icon: TrendingUp, bg: 'from-emerald-500 to-emerald-600', shadow: 'shadow-emerald-500/25' },
+            { label: 'Withdrawal Fees', value: formatNaira(stats.revenue.withdrawalFees), sub: 'Charged on payouts', icon: Wallet, bg: 'from-blue-500 to-blue-600', shadow: 'shadow-blue-500/25' },
+            { label: 'Total Revenue', value: formatNaira(stats.revenue.total), sub: 'Platform + withdrawal fees', icon: Activity, bg: 'from-purple-500 to-purple-600', shadow: 'shadow-purple-500/25' },
+          ].map((s) => (
+            <motion.div key={s.label} whileHover={{ y: -2 }} transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+              className={`relative overflow-hidden rounded-2xl bg-gradient-to-br ${s.bg} p-4 text-white shadow-lg ${s.shadow} cursor-default`}>
+              <div className="absolute -top-4 -right-4 h-16 w-16 rounded-full bg-white/10" />
+              <div className="relative">
+                <s.icon className="h-5 w-5 text-white/80" />
+                <p className="text-2xl font-black mt-2 font-mono-nums">{s.value}</p>
+                <p className="text-xs text-white/70 font-medium mt-0.5">{s.label}</p>
+                <p className="text-[10px] text-white/50 mt-0.5">{s.sub}</p>
+              </div>
+            </motion.div>
+          ))}
+        </motion.div>
+      )}
 
       {/* Pending Withdrawals Alert */}
       {stats && stats.withdrawals.pending > 0 && (

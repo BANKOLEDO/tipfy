@@ -11,6 +11,7 @@ const fadeUp = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }
 interface Withdrawal {
   id: string; amount: number; status: string; bankName: string; accountNumber: string
   accountName: string; reference: string; failureReason: string | null
+  fee: number; netAmount: number; estimatedTax: number
   createdAt: string; processedAt: string | null
   user: { id: string; username: string; displayName: string; email: string }
 }
@@ -110,7 +111,7 @@ export default function WithdrawalsPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50/50">
-                  {['Reference', 'User', 'Amount', 'Bank', 'Account', 'Status', 'Date'].map((h) => (
+                  {['Reference', 'User', 'Amount', 'Fee', 'Net', 'Bank', 'Account', 'Status', 'Date'].map((h) => (
                     <th key={h} className="text-left px-5 py-3 text-[10px] font-bold text-gray-400 uppercase tracking-wider">{h}</th>
                   ))}
                 </tr>
@@ -124,7 +125,12 @@ export default function WithdrawalsPage() {
                       <p className="font-medium text-dark-text group-hover:text-accent transition-colors">{w.user.displayName}</p>
                       <p className="text-[10px] text-gray-400">{w.user.email}</p>
                     </td>
-                    <td className="px-5 py-3.5 font-mono-nums font-bold text-dark-text">{formatNaira(w.amount)}</td>
+                    <td className="px-5 py-3.5 font-mono-nums font-bold text-dark-text">
+                      {formatNaira(w.amount)}
+                      {w.netAmount > 0 && <span className="block text-[10px] font-semibold text-emerald-500">payout {formatNaira(w.netAmount)}</span>}
+                    </td>
+                    <td className="px-5 py-3.5 font-mono-nums text-xs text-amber-600">{w.fee > 0 ? formatNaira(w.fee) : <span className="text-emerald-500 font-semibold">free</span>}</td>
+                    <td className="px-5 py-3.5 font-mono-nums text-xs text-gray-500">{formatNaira(w.netAmount || w.amount)}</td>
                     <td className="px-5 py-3.5 text-gray-500 text-xs font-medium">{w.bankName}</td>
                     <td className="px-5 py-3.5">
                       <div className="font-mono-nums text-xs text-gray-500">{w.accountNumber}</div>
@@ -142,7 +148,7 @@ export default function WithdrawalsPage() {
                   </motion.tr>
                 ))}
                 {withdrawals.length === 0 && (
-                  <tr><td colSpan={7} className="text-center py-16">
+                  <tr><td colSpan={9} className="text-center py-16">
                     <Wallet className="h-10 w-10 text-gray-200 mx-auto mb-3" />
                     <p className="text-sm font-semibold text-gray-400">No withdrawals found</p>
                     <p className="text-xs text-gray-300 mt-1">No withdrawal requests match your filters</p>

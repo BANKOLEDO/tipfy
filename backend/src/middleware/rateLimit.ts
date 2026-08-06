@@ -77,3 +77,26 @@ export const webhookRateLimit = rateLimit({
   keyGenerator: (req) => `webhook:${req.ip}`,
   message: 'Too many webhook requests',
 })
+
+export const pinRateLimit = rateLimit({
+  maxRequests: 5,
+  windowMs: 900000,
+  // Key by authenticated user so brute-forcing one account can't be spread
+  // across IPs (and legit users on shared IPs don't lock each other out).
+  keyGenerator: (req) => `pin:${(req as any).user?.userId || req.ip}`,
+  message: 'Too many PIN attempts. Try again later',
+})
+
+export const accountLookupRateLimit = rateLimit({
+  maxRequests: 30,
+  windowMs: 900000,
+  keyGenerator: (req) => `account-lookup:${req.ip}`,
+  message: 'Too many account lookups. Try again later',
+})
+
+export const feesRateLimit = rateLimit({
+  maxRequests: 120,
+  windowMs: 900000,
+  keyGenerator: (req) => `fees:${req.ip}`,
+  message: 'Too many fee quote requests',
+})

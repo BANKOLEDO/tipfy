@@ -5,6 +5,7 @@ import { profileSchema } from '~/lib/validations'
 import { validate } from '~/middleware/validate'
 import { authenticate, optionalAuth } from '~/middleware/auth'
 import { logAuditEvent, AuditActions } from '~/lib/audit'
+import { getPlatformFeeRate } from '~/lib/fees'
 
 const router = Router()
 
@@ -55,12 +56,17 @@ router.get(
           isVerified: true,
           isActive: true,
           createdAt: true,
+          plan: true,
+          planExpiresAt: true,
         },
       })
 
       if (!user || !user.isActive) {
         throw AppError.notFound('User not found')
       }
+
+      const { plan, planExpiresAt, ...publicUser } = user
+      const platformFeePercent = getPlatformFeeRate(plan, planExpiresAt)
 
       const recentTips = await db.tip.findMany({
         where: {
@@ -87,7 +93,7 @@ router.get(
       res.json({
         success: true,
         data: {
-          user,
+          user: { ...publicUser, platformFeePercent },
           recentTips: recentTips.map((tip) => ({
             ...tip,
             amount: Number(tip.amount),

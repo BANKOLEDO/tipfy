@@ -7,7 +7,6 @@ dns.setServers(['8.8.8.8', '8.8.4.4'])
 dns.setDefaultResultOrder('ipv4first')
 
 config({ path: resolve(__dirname, '../../.env.test'), override: true })
-
 process.env.NODE_ENV = 'test'
 
 import { db } from '~/lib/db'

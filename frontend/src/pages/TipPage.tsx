@@ -22,6 +22,8 @@ export default function TipPage() {
   const [message, setMessage] = useState('')
   const [category, setCategory] = useState('general')
   const [processing, setProcessing] = useState(false)
+  const [quote, setQuote] = useState<any>(null)
+  const [quoteLoading, setQuoteLoading] = useState(false)
   const addToast = useUIStore((s) => s.addToast)
 
   useEffect(() => {
@@ -34,6 +36,22 @@ export default function TipPage() {
   }, [username])
 
   const selectedAmount = amount || (customAmount ? parseInt(customAmount) : 0)
+
+  useEffect(() => {
+    if (!selectedAmount || selectedAmount <= 0 || !recipient?.id) {
+      setQuote(null)
+      setQuoteLoading(false)
+      return
+    }
+    setQuoteLoading(true)
+    const t = setTimeout(() => {
+      api<any>(`/tips/fees?recipientId=${recipient.id}&amount=${selectedAmount}`)
+        .then((res) => setQuote(res?.fees || null))
+        .catch(() => setQuote(null))
+        .finally(() => setQuoteLoading(false))
+    }, 350)
+    return () => clearTimeout(t)
+  }, [selectedAmount, recipient?.id])
 
   const handleTip = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -223,10 +241,12 @@ export default function TipPage() {
                       </div>
                     </div>
 
-                    <div className="text-center mb-6">
-                      <h2 className="text-lg font-bold text-dark-text">Almost there!</h2>
-                      <p className="text-sm text-text-muted mt-1">Add a personal touch to your tip</p>
-                    </div>
+                      <div className="text-center mb-6">
+                        <h2 className="text-lg font-bold text-dark-text">Almost there!</h2>
+                        <p className="text-sm text-text-muted mt-1">Add a personal touch to your tip</p>
+                      </div>
+
+                      <TipFeeBreakdown quote={quote} loading={quoteLoading} />
 
                     <form onSubmit={handleTip} className="space-y-4">
                       <div>
@@ -301,6 +321,45 @@ export default function TipPage() {
           <NairaCoinIcon className="h-3 w-3 text-accent" />
           <span className="text-[11px] font-medium text-text-muted">Powered by tipfy</span>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function TipFeeBreakdown({ quote, loading }: { quote: any; loading: boolean }) {
+  if (loading && !quote) {
+    return (
+      <div className="bg-light rounded-2xl border border-light-border p-4 space-y-2.5 text-sm">
+        <div className="h-3.5 w-1/2 bg-border/50 rounded animate-pulse" />
+        <div className="h-3.5 w-2/3 bg-border/50 rounded animate-pulse" />
+        <div className="h-3.5 w-3/5 bg-border/50 rounded animate-pulse" />
+      </div>
+    )
+  }
+  if (!quote) return null
+  const { amount, processingFee, totalCharge, platformFee, netToRecipient } = quote
+  return (
+    <div className="bg-light rounded-2xl border border-light-border p-4 space-y-2.5 text-sm">
+      <div className="flex justify-between text-text-secondary">
+        <span>Tip amount</span>
+        <span className="font-semibold text-dark-text">{formatNaira(amount)}</span>
+      </div>
+      <div className="flex justify-between text-text-secondary">
+        <span>Processing fee</span>
+        <span className="font-semibold text-dark-text">{formatNaira(processingFee)}</span>
+      </div>
+      <div className="flex justify-between text-text-secondary">
+        <span>Platform fee</span>
+        <span className="font-semibold text-dark-text">−{formatNaira(platformFee)}</span>
+      </div>
+      <div className="flex justify-between text-text-secondary">
+        <span>Receiver gets</span>
+        <span className="font-bold text-success">{formatNaira(netToRecipient)}</span>
+      </div>
+      <div className="h-px bg-light-border" />
+      <div className="flex justify-between items-center">
+        <span className="font-semibold text-dark-text">You pay</span>
+        <span className="text-base font-bold text-accent">{formatNaira(totalCharge)}</span>
       </div>
     </div>
   )

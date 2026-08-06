@@ -2,12 +2,14 @@ import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import { db } from '~/lib/db'
 import { createToken, verifyTokenAsync } from '~/lib/jwt'
-import { hashToken, generateResetToken } from '~/lib/crypto'
+import { hashToken, generateResetToken, generateOTP } from '~/lib/crypto'
 import { AppError } from '~/lib/errors'
-import { registerSchema, loginSchema, forgotPasswordSchema, resetPasswordSchema } from '~/lib/validations'
+import { registerSchema, loginSchema, forgotPasswordSchema, resetPasswordSchema, setWithdrawalPinSchema } from '~/lib/validations'
 import { validate } from '~/middleware/validate'
+import { authenticate } from '~/middleware/auth'
 import { authRateLimit } from '~/middleware/rateLimit'
 import { logAuditEvent, AuditActions } from '~/lib/audit'
+import { notifyWithdrawalPinSet } from '~/services/notifications'
 import { getEnv } from '~/config/env'
 
 const router = Router()
@@ -255,6 +257,7 @@ router.get('/me', async (req, res, next) => {
         totalTipsReceived: true,
         totalAmount: true,
         rating: true,
+        withdrawalPinHash: true,
         isVerified: true,
         role: true,
         createdAt: true,
@@ -265,11 +268,176 @@ router.get('/me', async (req, res, next) => {
       return res.json({ success: true, data: { user: null } })
     }
 
-    res.json({ success: true, data: { user } })
+    const { withdrawalPinHash, ...safeUser } = user
+
+    res.json({
+      success: true,
+      data: {
+        user: {
+          ...safeUser,
+          totalAmount: Number(safeUser.totalAmount),
+          rating: Number(safeUser.rating),
+          hasWithdrawalPin: Boolean(withdrawalPinHash),
+        },
+      },
+    })
   } catch (error) {
     next(error)
   }
 })
+
+// ─── Withdrawal PIN ────────────────────────────────────────────
+// Send a 6-digit OTP to the user's email to prove identity before
+// setting a withdrawal PIN for the first time.
+router.post(
+  '/withdrawal-pin/send-otp',
+  authenticate,
+  authRateLimit,
+  async (req, res, next) => {
+    try {
+      const userId = req.user!.userId
+      const user = await db.user.findUnique({
+        where: { id: userId },
+        select: { email: true, withdrawalPinHash: true },
+      })
+      if (!user) throw AppError.notFound('User not found')
+
+      if (user.withdrawalPinHash) {
+        throw AppError.badRequest('Withdrawal PIN already set')
+      }
+
+      // Invalidate any outstanding OTPs for this purpose
+      await db.otp.deleteMany({
+        where: { userId, purpose: 'withdrawal_pin', usedAt: null },
+      })
+
+      const otp = generateOTP(6)
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+
+      await db.otp.create({
+        data: {
+          userId,
+          otpHash: hashToken(otp),
+          purpose: 'withdrawal_pin',
+          expiresAt,
+        },
+      })
+
+      const env = getEnv()
+
+      if (env.RESEND_API_KEY) {
+        const { Resend } = await import('resend')
+        const resend = new Resend(env.RESEND_API_KEY)
+        await resend.emails.send({
+          from: 'tipfy <noreply@tipfy.app>',
+          to: user.email,
+          subject: 'Your tipfy verification code',
+          html: `
+            <div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;padding:32px">
+              <h2 style="margin:0 0 8px">Verify it's you</h2>
+              <p style="color:#666;margin:0 0 24px">Use this code to set your withdrawal PIN. It expires in 10 minutes.</p>
+              <div style="background:#F3F4F6;border-radius:12px;padding:20px;text-align:center;letter-spacing:8px;font-size:28px;font-weight:800;color:#1F2937">${otp}</div>
+              <p style="color:#999;margin:24px 0 0;font-size:13px">If you didn't request this, you can safely ignore this email.</p>
+            </div>
+          `,
+        })
+      } else {
+        console.log(`[DEV] Withdrawal PIN OTP for ${user.email}: ${otp}`)
+      }
+
+      await logAuditEvent({
+        userId,
+        action: 'WITHDRAWAL_PIN_OTP_SENT',
+        resource: 'user',
+        resourceId: userId,
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+      })
+
+      res.json({ success: true, data: { message: 'Verification code sent to your email' } })
+    } catch (error) {
+      next(error)
+    }
+  }
+)
+
+// Set the withdrawal PIN after verifying the OTP
+router.post(
+  '/withdrawal-pin',
+  authenticate,
+  authRateLimit,
+  validate(setWithdrawalPinSchema),
+  async (req, res, next) => {
+    try {
+      const userId = req.user!.userId
+      const { otp, pin } = req.body
+
+      const user = await db.user.findUnique({
+        where: { id: userId },
+        select: { withdrawalPinHash: true },
+      })
+      if (!user) throw AppError.notFound('User not found')
+
+      if (user.withdrawalPinHash) {
+        throw AppError.badRequest('Withdrawal PIN already set')
+      }
+
+      const otpRecord = await db.otp.findFirst({
+        where: { userId, purpose: 'withdrawal_pin', usedAt: null },
+        orderBy: { createdAt: 'desc' },
+      })
+
+      if (!otpRecord) {
+        throw AppError.badRequest('No verification code found. Request a new one.')
+      }
+
+      if (new Date() > otpRecord.expiresAt) {
+        throw AppError.badRequest('Verification code has expired. Request a new one.')
+      }
+
+      if (otpRecord.attempts >= 5) {
+        throw AppError.tooMany('Too many incorrect attempts. Request a new code.')
+      }
+
+      if (hashToken(otp) !== otpRecord.otpHash) {
+        await db.otp.update({
+          where: { id: otpRecord.id },
+          data: { attempts: { increment: 1 } },
+        })
+        throw AppError.badRequest('Incorrect verification code')
+      }
+
+      const env = getEnv()
+      const pinHash = await bcrypt.hash(pin, env.BCRYPT_ROUNDS)
+
+      await db.$transaction([
+        db.user.update({
+          where: { id: userId },
+          data: { withdrawalPinHash: pinHash },
+        }),
+        db.otp.update({
+          where: { id: otpRecord.id },
+          data: { usedAt: new Date() },
+        }),
+      ])
+
+      await logAuditEvent({
+        userId,
+        action: 'WITHDRAWAL_PIN_SET',
+        resource: 'user',
+        resourceId: userId,
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+      })
+
+      notifyWithdrawalPinSet(userId).catch(() => {})
+
+      res.json({ success: true, data: { message: 'Withdrawal PIN set successfully' } })
+    } catch (error) {
+      next(error)
+    }
+  }
+)
 
 router.post(
   '/forgot-password',

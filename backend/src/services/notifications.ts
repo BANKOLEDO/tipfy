@@ -1,7 +1,7 @@
 import { db } from '~/lib/db'
 import type { Prisma } from '@prisma/client'
 
-type NotificationType = 'tip_received' | 'tip_failed' | 'withdrawal_completed' | 'withdrawal_processing' | 'withdrawal_failed' | 'team_joined' | 'team_removed' | 'feedback_received'
+type NotificationType = 'tip_received' | 'tip_failed' | 'withdrawal_completed' | 'withdrawal_processing' | 'withdrawal_failed' | 'withdrawal_pin_set' | 'team_joined' | 'team_removed' | 'feedback_received'
 
 interface CreateNotification {
   userId: string
@@ -79,6 +79,16 @@ export async function notifyWithdrawalFailed(userId: string, amount: number, rea
     body: reason || `Your ₦${amount.toLocaleString()} withdrawal could not be processed.`,
     link: '/dashboard/withdraw',
     data: { amount, reason },
+  })
+}
+
+export async function notifyWithdrawalPinSet(userId: string) {
+  return createNotification({
+    userId,
+    type: 'withdrawal_pin_set',
+    title: 'Withdrawal PIN set',
+    body: 'Your withdrawal PIN has been created. Keep it safe — you\u2019ll need it for every withdrawal.',
+    link: '/dashboard/withdraw',
   })
 }
 

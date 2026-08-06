@@ -11,6 +11,7 @@ const fadeUp = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }
 interface Tip {
   id: string; reference: string; amount: number; status: string; category: string
   senderName: string; message: string; paymentMethod: string; isAnonymous: boolean
+  platformFee: number; netAmount: number; totalCharged: number
   completedAt: string | null; createdAt: string
   recipient: { id: string; username: string; displayName: string }
   sender: { id: string; username: string; displayName: string } | null
@@ -57,6 +58,9 @@ function TipDetailModal({ tip, onClose }: { tip: Tip; onClose: () => void }) {
             { label: 'Sender', value: tip.isAnonymous ? 'Anonymous' : (tip.sender?.displayName || tip.senderName || 'N/A') },
             { label: 'Message', value: tip.message || '—' },
             { label: 'Payment', value: tip.paymentMethod || '—' },
+            { label: 'Platform fee', value: `−${formatNaira(tip.platformFee || 0)}` },
+            { label: 'Recipient gets', value: formatNaira(tip.netAmount || tip.amount) },
+            { label: 'Total charged', value: formatNaira(tip.totalCharged || tip.amount) },
             { label: 'Date', value: new Date(tip.createdAt).toLocaleString() },
             ...(tip.completedAt ? [{ label: 'Completed', value: new Date(tip.completedAt).toLocaleString() }] : []),
           ].map((row) => (
@@ -153,7 +157,7 @@ export default function TipsPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50/50">
-                  {['Reference', 'Recipient', 'Sender', 'Amount', 'Category', 'Status', 'Date'].map((h) => (
+                  {['Reference', 'Recipient', 'Sender', 'Amount', 'Fee', 'Category', 'Status', 'Date'].map((h) => (
                     <th key={h} className="text-left px-5 py-3 text-[10px] font-bold text-gray-400 uppercase tracking-wider">{h}</th>
                   ))}
                 </tr>
@@ -173,7 +177,11 @@ export default function TipsPage() {
                       </div>
                     </td>
                     <td className="px-5 py-3.5 text-gray-500 text-xs">{t.isAnonymous ? 'Anonymous' : (t.sender?.displayName || t.senderName || 'N/A')}</td>
-                    <td className="px-5 py-3.5 font-mono-nums font-bold text-dark-text">{formatNaira(t.amount)}</td>
+                    <td className="px-5 py-3.5 font-mono-nums font-bold text-dark-text">
+                      {formatNaira(t.amount)}
+                      {t.netAmount > 0 && <span className="block text-[10px] font-semibold text-emerald-500">net {formatNaira(t.netAmount)}</span>}
+                    </td>
+                    <td className="px-5 py-3.5 font-mono-nums text-xs text-amber-600">−{formatNaira(t.platformFee || 0)}</td>
                     <td className="px-5 py-3.5">
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-md uppercase bg-gray-100 text-gray-500">{t.category}</span>
                     </td>
@@ -186,7 +194,7 @@ export default function TipsPage() {
                   </motion.tr>
                 ))}
                 {tips.length === 0 && (
-                  <tr><td colSpan={7} className="text-center py-16">
+                  <tr><td colSpan={8} className="text-center py-16">
                     <ArrowDownLeft className="h-10 w-10 text-gray-200 mx-auto mb-3" />
                     <p className="text-sm font-semibold text-gray-400">No tips found</p>
                     <p className="text-xs text-gray-300 mt-1">No tips match your current filters</p>

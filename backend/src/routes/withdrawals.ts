@@ -1,13 +1,17 @@
 import { Router } from 'express'
 import { v4 as uuid } from 'uuid'
+import bcrypt from 'bcryptjs'
 import { db } from '~/lib/db'
 import { AppError } from '~/lib/errors'
-import { withdrawSchema } from '~/lib/validations'
+import { withdrawSchema, accountValidateSchema } from '~/lib/validations'
 import { validate } from '~/middleware/validate'
 import { authenticate } from '~/middleware/auth'
+import { pinRateLimit, accountLookupRateLimit } from '~/middleware/rateLimit'
 import { logAuditEvent, AuditActions } from '~/lib/audit'
-import { initiateDisbursement, verifyWebhookSignature } from '~/services/monnify'
+import { initiateDisbursement, verifyWebhookSignature, validateAccount } from '~/services/monnify'
 import { notifyWithdrawalCompleted, notifyWithdrawalProcessing, notifyWithdrawalFailed } from '~/services/notifications'
+import { computeWithdrawalFee, estimateWithholdingTax } from '~/lib/fees'
+import { getEnv } from '~/config/env'
 
 const router = Router()
 
@@ -32,6 +36,11 @@ router.get('/', authenticate, async (req, res, next) => {
     const availableBalance = Number(user?.totalAmount || 0)
     const pendingAmount = Number(pendingTips._sum.amount || 0)
 
+    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+    const monthlyWithdrawals = await db.withdrawal.count({
+      where: { userId, createdAt: { gte: monthStart }, status: { not: 'failed' } },
+    })
+
     const withdrawals = await db.withdrawal.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
@@ -44,9 +53,15 @@ router.get('/', authenticate, async (req, res, next) => {
         balance: availableBalance,
         pendingAmount,
         totalTips: user?.totalTipsReceived || 0,
+        monthlyWithdrawals,
+        withdrawalFee: computeWithdrawalFee(monthlyWithdrawals),
+        freeWithdrawalsPerMonth: getEnv().FREE_WITHDRAWALS_PER_MONTH,
         withdrawals: withdrawals.map((w) => ({
           ...w,
           amount: Number(w.amount),
+          fee: Number(w.fee || 0),
+          netAmount: Number(w.netAmount || 0),
+          estimatedTax: Number(w.estimatedTax || 0),
           accountNumber:
             w.accountNumber.slice(0, 3) + '****' + w.accountNumber.slice(-3),
         })),
@@ -57,15 +72,62 @@ router.get('/', authenticate, async (req, res, next) => {
   }
 })
 
+// Look up a bank account name (Monnify name enquiry) so the user can
+// confirm their details before submitting a withdrawal.
+router.post(
+  '/validate-account',
+  authenticate,
+  validate(accountValidateSchema),
+  accountLookupRateLimit,
+  async (req, res, next) => {
+    try {
+      const { bankCode, accountNumber } = req.body
+
+      const result = await validateAccount(bankCode, accountNumber)
+
+      if (!result.requestSuccessful || !result.responseBody?.accountName) {
+        throw AppError.badRequest(result.responseMessage || 'Could not verify account details')
+      }
+
+      res.json({
+        success: true,
+        data: {
+          accountNumber: result.responseBody.accountNumber,
+          accountName: result.responseBody.accountName,
+          bankCode: result.responseBody.bankCode,
+        },
+      })
+    } catch (error) {
+      next(error)
+    }
+  }
+)
+
 // Create withdrawal request
 router.post(
   '/',
   authenticate,
   validate(withdrawSchema),
+  pinRateLimit,
   async (req, res, next) => {
     try {
       const userId = req.user!.userId
-      const { amount, bankCode, accountNumber } = req.body
+      const { amount, bankCode, accountNumber, pin } = req.body
+
+      // Verify the withdrawal PIN before doing anything
+      const pinUser = await db.user.findUnique({
+        where: { id: userId },
+        select: { withdrawalPinHash: true },
+      })
+
+      if (!pinUser?.withdrawalPinHash) {
+        throw new AppError('Withdrawal PIN not set. Set a PIN first.', 403, 'PIN_NOT_SET')
+      }
+
+      const pinValid = await bcrypt.compare(pin, pinUser.withdrawalPinHash)
+      if (!pinValid) {
+        throw AppError.unauthorized('Incorrect withdrawal PIN')
+      }
 
       const user = await db.user.findUnique({
         where: { id: userId },
@@ -103,6 +165,26 @@ router.post(
         throw AppError.badRequest('Maximum withdrawal is ₦500,000')
       }
 
+      // Resolve the beneficiary account name via Monnify name enquiry —
+      // it's now a mandatory field for disbursements and must match.
+      const accountCheck = await validateAccount(bankCode, accountNumber)
+      if (!accountCheck.requestSuccessful || !accountCheck.responseBody?.accountName) {
+        throw AppError.badRequest(
+          accountCheck.responseMessage || 'Unable to verify bank account details'
+        )
+      }
+      const resolvedAccountName = accountCheck.responseBody.accountName
+
+      // Withdrawal fee: first N withdrawals per month are free, then a flat fee
+      // comes out of the payout. WHT is recorded as an estimate for reconciliation.
+      const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+      const monthlyWithdrawals = await db.withdrawal.count({
+        where: { userId, createdAt: { gte: monthStart }, status: { not: 'failed' } },
+      })
+      const withdrawalFee = computeWithdrawalFee(monthlyWithdrawals)
+      const netAmount = amount - withdrawalFee
+      const estimatedTax = estimateWithholdingTax(netAmount)
+
       const BANKS: Record<string, string> = {
         '044': 'Access Bank',
         '033': 'United Bank for Africa',
@@ -123,44 +205,48 @@ router.post(
       const bankName = BANKS[bankCode] || 'Unknown Bank'
       const reference = `WD-${uuid().slice(0, 8).toUpperCase()}`
 
-      // Atomically debit balance and create withdrawal
+      // Atomically debit balance and create withdrawal. The conditional
+      // updateMany guards against concurrent withdrawals racing past each
+      // other (TOCTOU) and driving the balance negative.
       const withdrawal = await db.$transaction(async (tx) => {
-        // Re-check balance inside transaction (row-level lock via Prisma)
-        const lockedUser = await tx.user.findUnique({
-          where: { id: userId },
-          select: { totalAmount: true },
-        })
-
-        const lockedPending = await tx.withdrawal.aggregate({
-          where: {
-            userId,
-            status: { in: ['pending', 'processing'] },
-          },
-          _sum: { amount: true },
-        })
-
-        const lockedAvailable = Number(lockedUser?.totalAmount || 0) - Number(lockedPending._sum.amount || 0)
-
-        if (amount > lockedAvailable) {
-          throw AppError.badRequest(
-            `Insufficient balance. Available: ₦${lockedAvailable.toLocaleString()}`
-          )
-        }
-
-        // Debit balance immediately
-        await tx.user.update({
-          where: { id: userId },
+        const debited = await tx.user.updateMany({
+          where: { id: userId, totalAmount: { gte: amount } },
           data: { totalAmount: { decrement: amount } },
         })
+
+        if (debited.count === 0) {
+          const current = await tx.user.findUnique({
+            where: { id: userId },
+            select: { totalAmount: true },
+          })
+
+          const pending = await tx.withdrawal.aggregate({
+            where: {
+              userId,
+              status: { in: ['pending', 'processing'] },
+            },
+            _sum: { amount: true },
+          })
+
+          const available =
+            Number(current?.totalAmount || 0) - Number(pending._sum.amount || 0)
+
+          throw AppError.badRequest(
+            `Insufficient balance. Available: ₦${available.toLocaleString()}`
+          )
+        }
 
         return tx.withdrawal.create({
           data: {
             userId,
             amount,
+            fee: withdrawalFee,
+            netAmount,
+            estimatedTax,
             bankCode,
             bankName,
             accountNumber,
-            accountName: user.displayName,
+            accountName: resolvedAccountName,
             reference,
             status: 'pending',
           },
@@ -169,13 +255,20 @@ router.post(
 
       let finalStatus = withdrawal.status
 
-      // Initiate disbursement
+      // Mark the payout as "in flight" BEFORE calling Monnify. If the call
+      // throws (timeout/network) the outcome is unknown, so we must NOT refund
+      // — the webhook or the staleness reaper settles it from Monnify's status.
+      await db.withdrawal.update({
+        where: { id: withdrawal.id },
+        data: { status: 'processing' },
+      })
+
       try {
         const disbursement = await initiateDisbursement({
-          amount,
+          amount: netAmount,
           bankCode,
           accountNumber,
-          accountName: user.displayName,
+          accountName: resolvedAccountName,
           reference,
           narration: 'TipFY Withdrawal',
         })
@@ -183,47 +276,51 @@ router.post(
         if (disbursement.requestSuccessful) {
           await db.withdrawal.update({
             where: { id: withdrawal.id },
-            data: {
-              status: 'processing',
-              monnifyResponse: disbursement as any,
-            },
+            data: { monnifyResponse: disbursement as any },
           })
           finalStatus = 'processing'
           await notifyWithdrawalProcessing(userId, amount)
         } else {
-          // Refund balance on failure
-          await db.user.update({
-            where: { id: userId },
-            data: { totalAmount: { increment: amount } },
-          })
-
-          await db.withdrawal.update({
-            where: { id: withdrawal.id },
-            data: {
-              status: 'failed',
-              failureReason: disbursement.responseMessage,
-            },
-          })
+          // Monnify explicitly rejected the payout — safe to refund balance.
+          await db.$transaction([
+            db.user.update({
+              where: { id: userId },
+              data: { totalAmount: { increment: amount } },
+            }),
+            db.withdrawal.update({
+              where: { id: withdrawal.id },
+              data: {
+                status: 'failed',
+                failureReason: disbursement.responseMessage,
+              },
+            }),
+          ])
           finalStatus = 'failed'
           await notifyWithdrawalFailed(userId, amount, disbursement.responseMessage)
         }
       } catch (err) {
-        // Refund balance on service error
-        await db.user.update({
-          where: { id: userId },
-          data: { totalAmount: { increment: amount } },
-        })
+        // Ambiguous outcome — do not refund. The webhook or the reaper will
+        // settle this once Monnify reports the final disbursement status.
+        const message = err instanceof Error ? err.message : 'Disbursement service error'
 
         await db.withdrawal.update({
           where: { id: withdrawal.id },
           data: {
-            status: 'failed',
-            failureReason: err instanceof Error ? err.message : 'Disbursement service error',
+            monnifyResponse: { outcome: 'ambiguous', error: message },
           },
         })
-        finalStatus = 'failed'
 
-        await notifyWithdrawalFailed(userId, amount, 'Disbursement service unavailable')
+        await logAuditEvent({
+          userId,
+          action: 'withdrawal.ambiguous',
+          resource: 'withdrawal',
+          resourceId: withdrawal.id,
+          ipAddress: req.ip,
+          metadata: { amount, message },
+        })
+
+        finalStatus = 'processing'
+        await notifyWithdrawalProcessing(userId, amount)
       }
 
       await logAuditEvent({
@@ -242,6 +339,9 @@ router.post(
             id: withdrawal.id,
             reference: withdrawal.reference,
             amount: Number(withdrawal.amount),
+            fee: Number(withdrawal.fee || 0),
+            netAmount: Number(withdrawal.netAmount || 0),
+            estimatedTax: Number(withdrawal.estimatedTax || 0),
             status: finalStatus,
           },
         },
@@ -274,8 +374,12 @@ router.post('/webhook', async (req, res, next) => {
     })
 
     if (eventType === 'SUCCESSFUL_DISBURSEMENT' || eventType === 'DISBURSEMENT_SUCCESS') {
+      if (!eventData?.reference) {
+        return res.status(400).json({ success: false, message: 'Missing reference' })
+      }
+
       const withdrawal = await db.withdrawal.findFirst({
-        where: { reference: eventData?.reference },
+        where: { reference: eventData.reference },
       })
 
         if (withdrawal && withdrawal.status === 'processing') {
@@ -291,8 +395,12 @@ router.post('/webhook', async (req, res, next) => {
     }
 
     if (eventType === 'FAILED_DISBURSEMENT' || eventType === 'DISBURSEMENT_FAILED') {
+      if (!eventData?.reference) {
+        return res.status(400).json({ success: false, message: 'Missing reference' })
+      }
+
       const withdrawal = await db.withdrawal.findFirst({
-        where: { reference: eventData?.reference },
+        where: { reference: eventData.reference },
       })
 
       if (withdrawal && withdrawal.status === 'processing') {

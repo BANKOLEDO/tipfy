@@ -1,15 +1,18 @@
 import { useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Bell, Check, CheckCheck, Trash2, ArrowDownLeft, Wallet, Users, Star, AlertCircle, X } from 'lucide-react'
+import { Bell, Check, CheckCheck, Trash2, ArrowDownLeft, Wallet, Users, Star, AlertCircle, Clock, ShieldCheck, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useNotificationStore, type Notification } from '~/lib/notifications'
 import { timeAgo } from '~/lib/utils'
+import { playNotificationSound } from '~/lib/sound'
 
 const iconMap: Record<string, { icon: typeof Bell; color: string; bg: string }> = {
   tip_received: { icon: ArrowDownLeft, color: 'text-emerald-500', bg: 'bg-emerald-50' },
   tip_failed: { icon: AlertCircle, color: 'text-red-500', bg: 'bg-red-50' },
   withdrawal_completed: { icon: Wallet, color: 'text-accent', bg: 'bg-blue-50' },
+  withdrawal_processing: { icon: Clock, color: 'text-blue-500', bg: 'bg-blue-50' },
   withdrawal_failed: { icon: AlertCircle, color: 'text-red-500', bg: 'bg-red-50' },
+  withdrawal_pin_set: { icon: ShieldCheck, color: 'text-amber-500', bg: 'bg-amber-50' },
   team_joined: { icon: Users, color: 'text-purple-500', bg: 'bg-purple-50' },
   team_removed: { icon: Users, color: 'text-gray-400', bg: 'bg-gray-100' },
   feedback_received: { icon: Star, color: 'text-amber-500', bg: 'bg-amber-50' },
@@ -71,12 +74,21 @@ function NotificationItem({ notification, onRead, onDelete }: {
 export default function NotificationPanel() {
   const { notifications, unreadCount, loading, panelOpen, fetchNotifications, fetchUnreadCount, markAsRead, markAllAsRead, deleteNotification, setPanelOpen } = useNotificationStore()
   const panelRef = useRef<HTMLDivElement>(null)
+  const prevUnreadRef = useRef<number | null>(null)
 
   useEffect(() => {
     fetchUnreadCount()
     const interval = setInterval(fetchUnreadCount, 30000)
     return () => clearInterval(interval)
   }, [fetchUnreadCount])
+
+  useEffect(() => {
+    // Play a sound when a brand-new unread notification arrives
+    if (prevUnreadRef.current !== null && unreadCount > prevUnreadRef.current) {
+      playNotificationSound()
+    }
+    prevUnreadRef.current = unreadCount
+  }, [unreadCount])
 
   useEffect(() => {
     if (panelOpen) {
