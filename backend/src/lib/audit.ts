@@ -43,4 +43,10 @@ export const AuditActions = {
   TEAM_REMOVE: 'team.remove',
   PASSWORD_CHANGE: 'password.change',
   PASSWORD_RESET: 'password.reset',
+  ADMIN_LOGIN_OTP_SENT: 'admin.login.otp_sent',
+  ADMIN_LOGIN_VERIFIED: 'admin.login.otp_verified',
+  ADMIN_TIP_UPDATE: 'admin.tip.update',
+  ADMIN_TIP_DELETE: 'admin.tip.delete',
+  ADMIN_WITHDRAWAL_CANCEL: 'admin.withdrawal.cancel',
+  ADMIN_WITHDRAWAL_DELETE: 'admin.withdrawal.delete',
 } as const

@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
-import { Search, Wallet, Clock, CheckCircle, AlertCircle } from 'lucide-react'
-import { api } from '~/lib/api'
+import { Search, Wallet, Clock, CheckCircle, AlertCircle, XCircle, Trash2 } from 'lucide-react'
+import { api, ApiError } from '~/lib/api'
 import { formatNaira, timeAgo } from '~/lib/utils'
 import Pagination from '~/components/Pagination'
 import TableSkeleton from '~/components/TableSkeleton'
+import ConfirmDialog from '~/components/ConfirmDialog'
+import { useUIStore } from '~/lib/store'
 
 const fadeUp = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }
 
@@ -35,6 +37,9 @@ export default function WithdrawalsPage() {
   const [status, setStatus] = useState('')
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
+  const [confirm, setConfirm] = useState<{ type: 'cancel' | 'delete'; w: Withdrawal } | null>(null)
+  const [acting, setActing] = useState(false)
+  const addToast = useUIStore((s) => s.addToast)
 
   const fetchAll = useCallback(async (p = 1) => {
     setLoading(true)
@@ -52,6 +57,32 @@ export default function WithdrawalsPage() {
   const handleSearch = (e: React.FormEvent) => { e.preventDefault(); setPage(1); fetchAll(1) }
   const withdrawals = data?.withdrawals || []
   const p = data?.pagination
+
+  const runCancel = async () => {
+    if (!confirm) return
+    setActing(true)
+    try {
+      await api(`/admin/withdrawals/${confirm.w.id}/cancel`, { method: 'POST', body: { action: 'cancel' } })
+      addToast('success', 'Withdrawal cancelled — balance refunded')
+      setConfirm(null)
+      fetchAll(page)
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Action failed')
+    } finally { setActing(false) }
+  }
+
+  const runDelete = async () => {
+    if (!confirm) return
+    setActing(true)
+    try {
+      await api(`/admin/withdrawals/${confirm.w.id}`, { method: 'DELETE' })
+      addToast('success', 'Withdrawal record deleted')
+      setConfirm(null)
+      fetchAll(page)
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Action failed')
+    } finally { setActing(false) }
+  }
 
   return (
     <motion.div initial="hidden" animate="visible" variants={{ visible: { transition: { staggerChildren: 0.06 } } }} className="space-y-5">
@@ -104,14 +135,14 @@ export default function WithdrawalsPage() {
       </motion.div>
 
       {loading && !data ? (
-        <TableSkeleton rows={8} cols={7} />
+        <TableSkeleton rows={8} cols={8} />
       ) : (
         <motion.div variants={fadeUp} className="rounded-2xl bg-white border border-gray-200/60 overflow-hidden shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50/50">
-                  {['Reference', 'User', 'Amount', 'Fee', 'Net', 'Bank', 'Account', 'Status', 'Date'].map((h) => (
+                  {['Reference', 'User', 'Amount', 'Fee', 'Net', 'Bank', 'Account', 'Status', 'Date', 'Actions'].map((h) => (
                     <th key={h} className="text-left px-5 py-3 text-[10px] font-bold text-gray-400 uppercase tracking-wider">{h}</th>
                   ))}
                 </tr>
@@ -145,10 +176,26 @@ export default function WithdrawalsPage() {
                       )}
                     </td>
                     <td className="px-5 py-3.5 text-gray-400 text-xs">{timeAgo(w.createdAt)}</td>
+                    <td className="px-5 py-3.5">
+                      <div className="flex gap-1.5">
+                        {w.status === 'pending' && (
+                          <button onClick={() => setConfirm({ type: 'cancel', w })}
+                            className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1.5 rounded-lg bg-amber-50 text-amber-600 border border-amber-100 hover:bg-amber-100 transition-all">
+                            <XCircle className="h-3 w-3" /> Cancel
+                          </button>
+                        )}
+                        {w.status === 'failed' && (
+                          <button onClick={() => setConfirm({ type: 'delete', w })}
+                            className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1.5 rounded-lg bg-red-50 text-red-500 border border-red-100 hover:bg-red-100 transition-all">
+                            <Trash2 className="h-3 w-3" /> Delete
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </motion.tr>
                 ))}
                 {withdrawals.length === 0 && (
-                  <tr><td colSpan={9} className="text-center py-16">
+                  <tr><td colSpan={10} className="text-center py-16">
                     <Wallet className="h-10 w-10 text-gray-200 mx-auto mb-3" />
                     <p className="text-sm font-semibold text-gray-400">No withdrawals found</p>
                     <p className="text-xs text-gray-300 mt-1">No withdrawal requests match your filters</p>
@@ -161,6 +208,18 @@ export default function WithdrawalsPage() {
       )}
 
       {p && <Pagination page={p.page} totalPages={p.totalPages} total={p.total} label="withdrawals" onPageChange={setPage} />}
+
+      <ConfirmDialog
+        open={!!confirm}
+        title={confirm?.type === 'cancel' ? 'Cancel withdrawal?' : 'Delete withdrawal record?'}
+        message={confirm?.type === 'cancel'
+          ? `${formatNaira(confirm.w.amount)} will be refunded to ${confirm.w.user.displayName}'s balance. This cannot be undone.`
+          : `The failed withdrawal ${confirm?.w.reference} will be permanently removed from the records. This cannot be undone.`}
+        confirmLabel={confirm?.type === 'cancel' ? 'Cancel & Refund' : 'Delete'}
+        loading={acting}
+        onConfirm={confirm?.type === 'cancel' ? runCancel : runDelete}
+        onCancel={() => { if (!acting) setConfirm(null) }}
+      />
     </motion.div>
   )
 }

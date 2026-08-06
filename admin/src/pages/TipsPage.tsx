@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Search, X, ArrowDownLeft, TrendingUp, Clock, AlertCircle } from 'lucide-react'
-import { api } from '~/lib/api'
+import { Search, X, ArrowDownLeft, TrendingUp, Clock, AlertCircle, Pencil, Trash2 } from 'lucide-react'
+import { api, ApiError } from '~/lib/api'
 import { formatNaira, timeAgo, getInitials } from '~/lib/utils'
 import Pagination from '~/components/Pagination'
 import TableSkeleton from '~/components/TableSkeleton'
+import ConfirmDialog from '~/components/ConfirmDialog'
+import { useUIStore } from '~/lib/store'
 
 const fadeUp = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }
 
@@ -30,7 +32,52 @@ const statusIcons: Record<string, string> = {
   completed: '✓', pending: '⏳', processing: '●', failed: '✕',
 }
 
-function TipDetailModal({ tip, onClose }: { tip: Tip; onClose: () => void }) {
+const CATEGORIES = ['general', 'service', 'content', 'food', 'music']
+
+interface TipDetailModalProps {
+  tip: Tip
+  onClose: () => void
+  onUpdated: (tip: Tip) => void
+  onRequestDelete: (tip: Tip) => void
+}
+
+function TipDetailModal({ tip, onClose, onUpdated, onRequestDelete }: TipDetailModalProps) {
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState(tip.message || '')
+  const [category, setCategory] = useState(tip.category)
+  const [isAnonymous, setIsAnonymous] = useState(tip.isAnonymous)
+  const addToast = useUIStore((s) => s.addToast)
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      const res = await api<{ tip: Tip }>(`/admin/tips/${tip.id}`, {
+        method: 'PATCH',
+        body: { message, category, isAnonymous },
+      })
+      onUpdated(res.tip)
+      addToast('success', 'Tip updated')
+      setEditing(false)
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Update failed')
+    } finally { setSaving(false) }
+  }
+
+  const infoRows = [
+    { label: 'Reference', value: tip.reference },
+    { label: 'Category', value: tip.category },
+    { label: 'Recipient', value: tip.recipient.displayName },
+    { label: 'Sender', value: tip.isAnonymous ? 'Anonymous' : (tip.sender?.displayName || tip.senderName || 'N/A') },
+    { label: 'Message', value: tip.message || '—' },
+    { label: 'Payment', value: tip.paymentMethod || '—' },
+    { label: 'Platform fee', value: `−${formatNaira(tip.platformFee || 0)}` },
+    { label: 'Recipient gets', value: formatNaira(tip.netAmount || tip.amount) },
+    { label: 'Total charged', value: formatNaira(tip.totalCharged || tip.amount) },
+    { label: 'Date', value: new Date(tip.createdAt).toLocaleString() },
+    ...(tip.completedAt ? [{ label: 'Completed', value: new Date(tip.completedAt).toLocaleString() }] : []),
+  ]
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -46,30 +93,73 @@ function TipDetailModal({ tip, onClose }: { tip: Tip; onClose: () => void }) {
           <button onClick={onClose} className="absolute top-4 right-4 p-1.5 rounded-lg bg-white/20 hover:bg-white/30 transition-all">
             <X className="h-4 w-4" />
           </button>
-          <p className="text-sm text-white/70 font-medium">Tip Details</p>
+          <p className="text-sm text-white/70 font-medium">{editing ? 'Edit Tip' : 'Tip Details'}</p>
           <p className="text-3xl font-black mt-1 font-mono-nums">{formatNaira(tip.amount)}</p>
           <span className="inline-block mt-2 text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wide bg-white/20">{statusIcons[tip.status]} {tip.status}</span>
         </div>
-        <div className="p-6 space-y-3">
-          {[
-            { label: 'Reference', value: tip.reference },
-            { label: 'Category', value: tip.category },
-            { label: 'Recipient', value: tip.recipient.displayName },
-            { label: 'Sender', value: tip.isAnonymous ? 'Anonymous' : (tip.sender?.displayName || tip.senderName || 'N/A') },
-            { label: 'Message', value: tip.message || '—' },
-            { label: 'Payment', value: tip.paymentMethod || '—' },
-            { label: 'Platform fee', value: `−${formatNaira(tip.platformFee || 0)}` },
-            { label: 'Recipient gets', value: formatNaira(tip.netAmount || tip.amount) },
-            { label: 'Total charged', value: formatNaira(tip.totalCharged || tip.amount) },
-            { label: 'Date', value: new Date(tip.createdAt).toLocaleString() },
-            ...(tip.completedAt ? [{ label: 'Completed', value: new Date(tip.completedAt).toLocaleString() }] : []),
-          ].map((row) => (
-            <div key={row.label} className="flex items-center justify-between text-sm py-1">
-              <span className="text-gray-400">{row.label}</span>
-              <span className="font-medium text-dark-text text-right max-w-[220px] truncate">{row.value}</span>
+
+        {!editing ? (
+          <>
+            <div className="p-6 space-y-3">
+              {infoRows.map((row) => (
+                <div key={row.label} className="flex items-center justify-between text-sm py-1">
+                  <span className="text-gray-400">{row.label}</span>
+                  <span className="font-medium text-dark-text text-right max-w-[220px] truncate">{row.value}</span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+            <div className="px-6 pb-6 flex gap-2.5">
+              <button onClick={() => onRequestDelete(tip)}
+                className="flex-1 h-11 rounded-2xl text-sm font-bold bg-red-50 text-red-500 hover:bg-red-100 transition-all">
+                <span className="inline-flex items-center gap-1.5"><Trash2 className="h-3.5 w-3.5" /> Delete</span>
+              </button>
+              <button onClick={() => setEditing(true)}
+                className="flex-1 h-11 rounded-2xl text-sm font-bold bg-accent text-white hover:bg-accent-hover transition-all shadow-md shadow-blue-500/25">
+                <span className="inline-flex items-center gap-1.5"><Pencil className="h-3.5 w-3.5" /> Edit</span>
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="p-6 space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-2">Message</label>
+              <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3}
+                className="w-full px-4 py-3 text-sm bg-gray-50 border-2 border-gray-100 rounded-2xl text-dark-text placeholder:text-gray-400 focus:outline-none focus:border-accent focus:ring-4 focus:ring-accent/10 transition-all resize-none"
+                placeholder="Tip message..." />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-2">Category</label>
+              <div className="flex flex-wrap gap-1.5">
+                {CATEGORIES.map((c) => (
+                  <button key={c} type="button" onClick={() => setCategory(c)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      category === c ? 'bg-accent text-white shadow-md shadow-blue-500/20' : 'bg-gray-100 text-gray-500 hover:text-dark-text'
+                    }`}>{c}</button>
+                ))}
+              </div>
+            </div>
+            <button type="button" onClick={() => setIsAnonymous(!isAnonymous)}
+              className="flex items-center justify-between w-full px-4 py-3 rounded-2xl bg-gray-50 border-2 border-gray-100 text-left transition-all">
+              <span>
+                <span className="block text-xs font-semibold text-dark-text">Hide sender</span>
+                <span className="block text-[10px] text-gray-400 mt-0.5">Display this tip as anonymous</span>
+              </span>
+              <span className={`relative w-11 h-6 rounded-full transition-colors ${isAnonymous ? 'bg-accent' : 'bg-gray-300'}`}>
+                <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${isAnonymous ? 'left-[22px]' : 'left-0.5'}`} />
+              </span>
+            </button>
+            <div className="flex gap-2.5 pt-1">
+              <button onClick={() => { setEditing(false); setMessage(tip.message || ''); setCategory(tip.category); setIsAnonymous(tip.isAnonymous) }}
+                className="flex-1 h-11 rounded-2xl text-sm font-bold bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all">
+                Cancel
+              </button>
+              <button onClick={handleSave} disabled={saving}
+                className="flex-1 h-11 rounded-2xl text-sm font-bold bg-accent text-white hover:bg-accent-hover disabled:opacity-50 transition-all shadow-md shadow-blue-500/25">
+                {saving ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        )}
       </motion.div>
     </motion.div>
   )
@@ -82,6 +172,9 @@ export default function TipsPage() {
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [selectedTip, setSelectedTip] = useState<Tip | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<Tip | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const addToast = useUIStore((s) => s.addToast)
 
   const fetchTips = useCallback(async (p = 1) => {
     setLoading(true)
@@ -99,6 +192,25 @@ export default function TipsPage() {
   const handleSearch = (e: React.FormEvent) => { e.preventDefault(); setPage(1); fetchTips(1) }
   const tips = data?.tips || []
   const p = data?.pagination
+
+  const handleUpdated = (updated: Tip) => {
+    setData((d) => d && { ...d, tips: d.tips.map((t) => (t.id === updated.id ? { ...t, ...updated } : t)) })
+    setSelectedTip((t) => t && { ...t, ...updated })
+  }
+
+  const runDelete = async () => {
+    if (!confirmDelete) return
+    setDeleting(true)
+    try {
+      await api(`/admin/tips/${confirmDelete.id}`, { method: 'DELETE' })
+      addToast('success', 'Tip deleted')
+      setData((d) => d && { ...d, tips: d.tips.filter((t) => t.id !== confirmDelete.id) })
+      setSelectedTip(null)
+      setConfirmDelete(null)
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Delete failed')
+    } finally { setDeleting(false) }
+  }
 
   return (
     <motion.div initial="hidden" animate="visible" variants={{ visible: { transition: { staggerChildren: 0.06 } } }} className="space-y-5">
@@ -209,8 +321,29 @@ export default function TipsPage() {
       {p && <Pagination page={p.page} totalPages={p.totalPages} total={p.total} label="tips" onPageChange={setPage} />}
 
       <AnimatePresence>
-        {selectedTip && <TipDetailModal tip={selectedTip} onClose={() => setSelectedTip(null)} />}
+        {selectedTip && (
+          <TipDetailModal
+            tip={selectedTip}
+            onClose={() => setSelectedTip(null)}
+            onUpdated={handleUpdated}
+            onRequestDelete={setConfirmDelete}
+          />
+        )}
       </AnimatePresence>
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="Delete tip?"
+        message={confirmDelete
+          ? `${formatNaira(confirmDelete.amount)} tip (${confirmDelete.reference}) will be permanently removed${confirmDelete.status === 'completed'
+              ? ', and the credited amount will be reversed from the recipient\'s balance'
+              : ''}. This cannot be undone.`
+          : ''}
+        confirmLabel="Delete"
+        loading={deleting}
+        onConfirm={runDelete}
+        onCancel={() => { if (!deleting) setConfirmDelete(null) }}
+      />
     </motion.div>
   )
 }

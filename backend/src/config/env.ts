@@ -25,6 +25,7 @@ const envSchema = z.object({
   ENCRYPTION_KEY: z.string().min(32),
   ENCRYPTION_IV: z.string().min(16),
   RESEND_API_KEY: z.string().optional(),
+  EMAIL_FROM: z.string().optional().default('tipfy <onboarding@resend.dev>'),
   LOG_LEVEL: z.enum(['dev', 'prod', 'combined']).default('dev'),
   ADMIN_EMAIL: z.string().optional(),
 

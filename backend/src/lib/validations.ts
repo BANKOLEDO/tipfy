@@ -83,6 +83,31 @@ export const setWithdrawalPinSchema = z.object({
     .regex(/^\d{4}$/, 'PIN must be 4 digits'),
 })
 
+export const verifyAdminOtpSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  otp: z
+    .string()
+    .length(6, 'OTP must be 6 digits')
+    .regex(/^\d{6}$/, 'OTP must be 6 digits'),
+})
+
+export const updateTipSchema = z.object({
+  message: z
+    .string()
+    .max(200, 'Message must be at most 200 characters')
+    .optional()
+    .or(z.literal('')),
+  category: z
+    .enum(['general', 'service', 'content', 'food', 'music'])
+    .optional(),
+  isAnonymous: z.boolean().optional(),
+})
+
+export const withdrawalAdminActionSchema = z.object({
+  action: z.enum(['cancel']),
+  reason: z.string().max(500).optional(),
+})
+
 export const accountValidateSchema = z.object({
   bankCode: z.string().min(1, 'Select a bank'),
   accountNumber: z
@@ -169,6 +194,9 @@ export type RegisterInput = z.infer<typeof registerSchema>
 export type TipInput = z.infer<typeof tipSchema>
 export type WithdrawInput = z.infer<typeof withdrawSchema>
 export type SetWithdrawalPinInput = z.infer<typeof setWithdrawalPinSchema>
+export type VerifyAdminOtpInput = z.infer<typeof verifyAdminOtpSchema>
+export type UpdateTipInput = z.infer<typeof updateTipSchema>
+export type WithdrawalAdminActionInput = z.infer<typeof withdrawalAdminActionSchema>
 export type TipFeeQuoteInput = z.infer<typeof tipFeeQuoteSchema>
 export type ProfileInput = z.infer<typeof profileSchema>
 export type FeedbackInput = z.infer<typeof feedbackSchema>

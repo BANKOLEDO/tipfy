@@ -2,7 +2,10 @@ import { Router } from 'express'
 import { db } from '~/lib/db'
 import { AppError } from '~/lib/errors'
 import { requireAdmin, requireSuperAdmin } from '~/middleware/admin'
-import { logAuditEvent } from '~/lib/audit'
+import { validate } from '~/middleware/validate'
+import { logAuditEvent, AuditActions } from '~/lib/audit'
+import { updateTipSchema, withdrawalAdminActionSchema } from '~/lib/validations'
+import { notifyWithdrawalFailed } from '~/services/notifications'
 
 const router = Router()
 
@@ -210,7 +213,11 @@ router.get('/users/:userId', async (req, res, next) => {
       data: {
         user: { ...user, totalAmount: Number(user.totalAmount), rating: Number(user.rating) },
         stats: { tipsReceived, tipsSent, withdrawals: withdrawals.length, feedbackCount },
-        recentWithdrawals: withdrawals.map(w => ({ ...w, amount: Number(w.amount) })),
+        recentWithdrawals: withdrawals.map(w => ({
+          ...w,
+          amount: Number(w.amount),
+          accountNumber: w.accountNumber.slice(0, 3) + '****' + w.accountNumber.slice(-3),
+        })),
       },
     })
   } catch (error) {
@@ -329,11 +336,129 @@ router.get('/tips', async (req, res, next) => {
           platformFee: Number(t.platformFee || 0),
           netAmount: Number(t.netAmount || 0),
           totalCharged: Number(t.totalCharged || 0),
-          recipientName: t.isAnonymous ? 'Anonymous' : (t.sender?.displayName || t.senderName || 'Unknown'),
+          recipientName: t.recipient?.displayName || 'Unknown',
         })),
         pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
       },
     })
+  } catch (error) {
+    next(error)
+  }
+})
+
+// ─── Tip Admin Actions ─────────────────────────────────────────
+// Update safe, non-monetary fields of a tip. Amounts and money fields
+// are intentionally NOT editable — they reflect settled payments.
+router.patch(
+  '/tips/:tipId',
+  validate(updateTipSchema),
+  async (req, res, next) => {
+    try {
+      const tipId = req.params.tipId as string
+      const { message, category, isAnonymous } = req.body
+
+      const tip = await db.tip.findUnique({
+        where: { id: tipId },
+        select: { id: true },
+      })
+      if (!tip) throw AppError.notFound('Tip not found')
+
+      const updated = await db.tip.update({
+        where: { id: tipId },
+        data: {
+          ...(message !== undefined ? { message } : {}),
+          ...(category !== undefined ? { category } : {}),
+          ...(isAnonymous !== undefined ? { isAnonymous } : {}),
+        },
+        select: {
+          id: true,
+          reference: true,
+          message: true,
+          category: true,
+          isAnonymous: true,
+        },
+      })
+
+      await logAuditEvent({
+        userId: req.user!.userId,
+        action: AuditActions.ADMIN_TIP_UPDATE,
+        resource: 'tip',
+        resourceId: tipId,
+        ipAddress: req.ip,
+        metadata: req.body,
+      })
+
+      res.json({ success: true, data: { tip: updated } })
+    } catch (error) {
+      next(error)
+    }
+  }
+)
+
+// Delete a tip. For completed tips the recipient was already credited,
+// so the ledger (balance + tip count + transaction record) is reversed
+// in the same transaction to keep accounting consistent.
+router.delete('/tips/:tipId', async (req, res, next) => {
+  try {
+    const tipId = req.params.tipId as string
+
+    const tip = await db.tip.findUnique({
+      where: { id: tipId },
+      select: {
+        id: true,
+        reference: true,
+        status: true,
+        amount: true,
+        platformFee: true,
+        recipientId: true,
+      },
+    })
+    if (!tip) throw AppError.notFound('Tip not found')
+
+    if (tip.status === 'completed') {
+      const netCredit = Number(tip.amount) - Number(tip.platformFee || 0)
+
+      await db.$transaction(async (tx) => {
+        const recipient = await tx.user.findUnique({
+          where: { id: tip.recipientId },
+          select: { totalAmount: true, totalTipsReceived: true },
+        })
+
+        if (recipient) {
+          const newBalance = Math.max(
+            0,
+            Number(recipient.totalAmount) - netCredit
+          )
+          await tx.user.update({
+            where: { id: tip.recipientId },
+            data: {
+              totalAmount: newBalance,
+              totalTipsReceived: Math.max(0, recipient.totalTipsReceived - 1),
+            },
+          })
+        }
+
+        await tx.transaction.deleteMany({ where: { tipId } })
+        await tx.feedback.deleteMany({ where: { tipId } })
+        await tx.tip.delete({ where: { id: tipId } })
+      })
+    } else {
+      await db.$transaction(async (tx) => {
+        await tx.feedback.deleteMany({ where: { tipId } })
+        await tx.tip.delete({ where: { id: tipId } })
+      })
+    }
+
+    await logAuditEvent({
+      userId: req.user!.userId,
+      action: AuditActions.ADMIN_TIP_DELETE,
+      resource: 'tip',
+      resourceId: tipId,
+      ipAddress: req.ip,
+      metadata: { reference: tip.reference, status: tip.status },
+    })
+
+    res.json({ success: true, data: { message: 'Tip deleted' } })
   } catch (error) {
     next(error)
   }
@@ -388,6 +513,123 @@ router.get('/withdrawals', async (req, res, next) => {
         pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
       },
     })
+  } catch (error) {
+    next(error)
+  }
+})
+
+// ─── Withdrawal Admin Actions ──────────────────────────────────
+// Cancel a withdrawal that has never left the platform (status
+// 'pending') and refund the debited balance. Withdrawals that are
+// 'processing' are refused — their final state must come from Monnify
+// (webhook or staleness reaper) to avoid double-paying a payout.
+router.post(
+  '/withdrawals/:withdrawalId/cancel',
+  validate(withdrawalAdminActionSchema),
+  async (req, res, next) => {
+    try {
+      const withdrawalId = req.params.withdrawalId as string
+      const { reason } = req.body
+
+      const withdrawal = await db.withdrawal.findUnique({
+        where: { id: withdrawalId },
+        select: { id: true, reference: true, status: true, amount: true, userId: true },
+      })
+      if (!withdrawal) throw AppError.notFound('Withdrawal not found')
+
+      if (withdrawal.status === 'processing') {
+        throw AppError.conflict(
+          'This withdrawal is in flight. Its status must be resolved with Monnify before it can be cancelled.'
+        )
+      }
+      if (withdrawal.status !== 'pending') {
+        throw AppError.conflict(
+          `Only pending withdrawals can be cancelled (current status: ${withdrawal.status})`
+        )
+      }
+
+      // Atomically claim the cancellation; refund only if this call won.
+      const refunded = await db.$transaction(async (tx) => {
+        const claim = await tx.withdrawal.updateMany({
+          where: { id: withdrawalId, status: 'pending' },
+          data: {
+            status: 'failed',
+            failureReason: reason || 'Cancelled by admin',
+          },
+        })
+
+        if (claim.count === 0) return false
+
+        await tx.user.update({
+          where: { id: withdrawal.userId },
+          data: { totalAmount: { increment: withdrawal.amount } },
+        })
+        return true
+      })
+
+      if (!refunded) {
+        throw AppError.conflict('Withdrawal has already been processed')
+      }
+
+      await notifyWithdrawalFailed(
+        withdrawal.userId,
+        Number(withdrawal.amount),
+        reason || 'Your withdrawal request was cancelled by support'
+      )
+
+      await logAuditEvent({
+        userId: req.user!.userId,
+        action: AuditActions.ADMIN_WITHDRAWAL_CANCEL,
+        resource: 'withdrawal',
+        resourceId: withdrawalId,
+        ipAddress: req.ip,
+        metadata: { reference: withdrawal.reference, reason },
+      })
+
+      res.json({
+        success: true,
+        data: {
+          message: 'Withdrawal cancelled and balance refunded',
+          refunded: Number(withdrawal.amount),
+        },
+      })
+    } catch (error) {
+      next(error)
+    }
+  }
+)
+
+// Remove a failed withdrawal record (used to clean up junk entries).
+// Only 'failed' withdrawals can be deleted — money is already refunded
+// or was never disbursed, so no ledger changes are needed.
+router.delete('/withdrawals/:withdrawalId', async (req, res, next) => {
+  try {
+    const withdrawalId = req.params.withdrawalId as string
+
+    const withdrawal = await db.withdrawal.findUnique({
+      where: { id: withdrawalId },
+      select: { id: true, reference: true, status: true },
+    })
+    if (!withdrawal) throw AppError.notFound('Withdrawal not found')
+
+    if (withdrawal.status !== 'failed') {
+      throw AppError.conflict(
+        `Only failed withdrawals can be deleted (current status: ${withdrawal.status})`
+      )
+    }
+
+    await db.withdrawal.delete({ where: { id: withdrawalId } })
+
+    await logAuditEvent({
+      userId: req.user!.userId,
+      action: AuditActions.ADMIN_WITHDRAWAL_DELETE,
+      resource: 'withdrawal',
+      resourceId: withdrawalId,
+      ipAddress: req.ip,
+      metadata: { reference: withdrawal.reference },
+    })
+
+    res.json({ success: true, data: { message: 'Withdrawal record deleted' } })
   } catch (error) {
     next(error)
   }

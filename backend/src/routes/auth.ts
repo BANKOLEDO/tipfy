@@ -4,7 +4,7 @@ import { db } from '~/lib/db'
 import { createToken, verifyTokenAsync } from '~/lib/jwt'
 import { hashToken, generateResetToken, generateOTP } from '~/lib/crypto'
 import { AppError } from '~/lib/errors'
-import { registerSchema, loginSchema, forgotPasswordSchema, resetPasswordSchema, setWithdrawalPinSchema } from '~/lib/validations'
+import { registerSchema, loginSchema, forgotPasswordSchema, resetPasswordSchema, setWithdrawalPinSchema, verifyAdminOtpSchema } from '~/lib/validations'
 import { validate } from '~/middleware/validate'
 import { authenticate } from '~/middleware/auth'
 import { authRateLimit } from '~/middleware/rateLimit'
@@ -135,13 +135,6 @@ router.post(
         throw AppError.unauthorized('Invalid email or password')
       }
 
-      const token = await createToken({
-        userId: user.id,
-        email: user.email,
-        username: user.username,
-        role: user.role,
-      })
-
       const env = getEnv()
 
       // Auto-promote admin if email matches ADMIN_EMAIL env
@@ -151,12 +144,72 @@ router.post(
         userRole = 'admin'
       }
 
-      // Re-issue token with correct role if promoted
-      const finalToken = userRole !== user.role
-        ? await createToken({ userId: user.id, email: user.email, username: user.username, role: userRole })
-        : token
+      // ─── Staff 2FA ─────────────────────────────────────────────
+      // Admin and support accounts must verify an email OTP before a
+      // session is issued. No token is returned from /login for these
+      // roles — the client must complete /auth/login/verify-otp.
+      const isStaff = userRole === 'admin' || userRole === 'support'
+      if (isStaff) {
+        await db.otp.deleteMany({
+          where: { userId: user.id, purpose: 'admin_login', usedAt: null },
+        })
 
-      const tokenHash = hashToken(finalToken)
+        const otp = generateOTP(6)
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+
+        await db.otp.create({
+          data: {
+            userId: user.id,
+            otpHash: hashToken(otp),
+            purpose: 'admin_login',
+            expiresAt,
+          },
+        })
+
+        if (env.RESEND_API_KEY) {
+          const { Resend } = await import('resend')
+          const resend = new Resend(env.RESEND_API_KEY)
+          await resend.emails.send({
+            from: env.EMAIL_FROM,
+            to: user.email,
+            subject: 'Your tipfy admin sign-in code',
+            html: `
+              <div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;padding:32px">
+                <h2 style="margin:0 0 8px">Admin sign-in</h2>
+                <p style="color:#666;margin:0 0 24px">Use this code to finish signing in to the tipfy admin panel. It expires in 10 minutes.</p>
+                <div style="background:#F3F4F6;border-radius:12px;padding:20px;text-align:center;letter-spacing:8px;font-size:28px;font-weight:800;color:#1F2937">${otp}</div>
+                <p style="color:#999;margin:24px 0 0;font-size:13px">If you didn't try to sign in, someone has your password — change it immediately.</p>
+              </div>
+            `,
+          })
+        } else {
+          console.log(`[DEV] Admin login OTP for ${user.email}: ${otp}`)
+        }
+
+        await logAuditEvent({
+          userId: user.id,
+          action: AuditActions.ADMIN_LOGIN_OTP_SENT,
+          resource: 'user',
+          resourceId: user.id,
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent'],
+        })
+
+        const maskedEmail = user.email.replace(/^(.)(.+)(@.+)$/, '$1***$3')
+        return res.json({
+          success: true,
+          data: { requiresOtp: true, email: maskedEmail },
+        })
+      }
+
+      const token = await createToken({
+        userId: user.id,
+        email: user.email,
+        username: user.username,
+        role: userRole,
+      })
+
+      const tokenHash = hashToken(token)
 
       await db.session.create({
         data: {
@@ -187,7 +240,7 @@ router.post(
       res.json({
         success: true,
         data: {
-          token: finalToken,
+          token,
           user: {
             id: user.id,
             email: user.email,
@@ -195,6 +248,123 @@ router.post(
             displayName: user.displayName,
             isBusiness: user.isBusiness,
             role: userRole,
+          },
+        },
+      })
+    } catch (error) {
+      next(error)
+    }
+  }
+)
+
+// Complete staff 2FA: verify the emailed OTP and issue the session
+router.post(
+  '/login/verify-otp',
+  authRateLimit,
+  validate(verifyAdminOtpSchema),
+  async (req, res, next) => {
+    try {
+      const { email, otp } = req.body
+
+      const user = await db.user.findUnique({
+        where: { email },
+        select: {
+          id: true,
+          email: true,
+          username: true,
+          displayName: true,
+          isBusiness: true,
+          isActive: true,
+          role: true,
+        },
+      })
+
+      if (!user) {
+        throw AppError.unauthorized('Verification failed. Sign in again.')
+      }
+
+      if (!user.isActive) {
+        throw AppError.forbidden('Account has been deactivated')
+      }
+
+      if (user.role !== 'admin' && user.role !== 'support') {
+        throw AppError.forbidden('Verification is only required for staff accounts')
+      }
+
+      const otpRecord = await db.otp.findFirst({
+        where: { userId: user.id, purpose: 'admin_login', usedAt: null },
+        orderBy: { createdAt: 'desc' },
+      })
+
+      if (!otpRecord) {
+        throw AppError.badRequest('No verification code found. Sign in again to get a new one.')
+      }
+
+      if (new Date() > otpRecord.expiresAt) {
+        throw AppError.badRequest('Verification code has expired. Sign in again to get a new one.')
+      }
+
+      if (otpRecord.attempts >= 5) {
+        throw AppError.tooMany('Too many incorrect attempts. Sign in again to get a new code.')
+      }
+
+      if (hashToken(otp) !== otpRecord.otpHash) {
+        await db.otp.update({
+          where: { id: otpRecord.id },
+          data: { attempts: { increment: 1 } },
+        })
+        throw AppError.badRequest('Incorrect verification code')
+      }
+
+      const token = await createToken({
+        userId: user.id,
+        email: user.email,
+        username: user.username,
+        role: user.role,
+      })
+
+      const tokenHash = hashToken(token)
+
+      await db.$transaction([
+        db.session.create({
+          data: {
+            userId: user.id,
+            tokenHash,
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent'],
+            expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+          },
+        }),
+        db.user.update({
+          where: { id: user.id },
+          data: { lastLoginAt: new Date() },
+        }),
+        db.otp.update({
+          where: { id: otpRecord.id },
+          data: { usedAt: new Date() },
+        }),
+      ])
+
+      await logAuditEvent({
+        userId: user.id,
+        action: AuditActions.ADMIN_LOGIN_VERIFIED,
+        resource: 'user',
+        resourceId: user.id,
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+      })
+
+      res.json({
+        success: true,
+        data: {
+          token,
+          user: {
+            id: user.id,
+            email: user.email,
+            username: user.username,
+            displayName: user.displayName,
+            isBusiness: user.isBusiness,
+            role: user.role,
           },
         },
       })
@@ -329,7 +499,7 @@ router.post(
         const { Resend } = await import('resend')
         const resend = new Resend(env.RESEND_API_KEY)
         await resend.emails.send({
-          from: 'tipfy <noreply@tipfy.app>',
+          from: env.EMAIL_FROM,
           to: user.email,
           subject: 'Your tipfy verification code',
           html: `
@@ -475,7 +645,7 @@ router.post(
         const { Resend } = await import('resend')
         const resend = new Resend(env.RESEND_API_KEY)
         await resend.emails.send({
-          from: 'tipfy <noreply@tipfy.app>',
+          from: env.EMAIL_FROM,
           to: email,
           subject: 'Reset your tipfy password',
           html: `
