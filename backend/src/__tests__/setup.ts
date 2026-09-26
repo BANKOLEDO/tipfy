@@ -1,12 +1,35 @@
 import { config } from 'dotenv'
 import { resolve } from 'path'
 import dns from 'dns'
+import fs from 'fs'
 
 // Use Google DNS to resolve Neon hostname (ISP DNS can't resolve it)
 dns.setServers(['8.8.8.8', '8.8.4.4'])
 dns.setDefaultResultOrder('ipv4first')
 
-config({ path: resolve(__dirname, '../../.env.test'), override: true })
+const root = resolve(__dirname, '../..')
+
+function readEnvUrl(file: string): string | undefined {
+  const full = resolve(root, file)
+  if (!fs.existsSync(full)) return undefined
+  const match = fs.readFileSync(full, 'utf8').match(/^DATABASE_URL=["']?(.*?)["']?\s*$/m)
+  return match?.[1]
+}
+
+// These suites write real rows (users, tips, withdrawals, audit logs) and
+// clean up with `email contains 'test+'` rather than rolling back a
+// transaction. Pointing them at the live database would pollute production and
+// fire real notification/webhook side effects, so refuse to start.
+const testUrl = readEnvUrl('.env.test')
+const prodUrl = readEnvUrl('.env')
+if (testUrl && prodUrl && testUrl === prodUrl) {
+  throw new Error(
+    'Refusing to run tests: .env.test DATABASE_URL is identical to .env DATABASE_URL.\n' +
+      'Create an isolated test database (e.g. a Neon branch) and point .env.test at it.'
+  )
+}
+
+config({ path: resolve(root, '.env.test'), override: true })
 process.env.NODE_ENV = 'test'
 
 import { db } from '~/lib/db'
