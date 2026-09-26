@@ -22,7 +22,7 @@ model User {
   businessName      String?  @map("business_name")
   businessCategory  String?  @map("business_category")
   totalTipsReceived Int      @default(0) @map("total_tips_received")
-  totalAmount       Decimal  @default(0) @db.Decimal(12, 2) @map("total_amount")
+  totalAmount       Decimal  @default(0) @db.Decimal(18, 2) @map("total_amount")
   rating            Decimal  @default(0) @db.Decimal(3, 2)
   withdrawalPinHash String?  @map("withdrawal_pin_hash")
   isVerified        Boolean  @default(false) @map("is_verified")
@@ -46,6 +46,8 @@ model User {
   sessions        Session[]
   passwordResetTokens PasswordResetToken[]
   otps            Otp[]
+  ledgerEntries   LedgerEntry[]
+  idempotencyKeys IdempotencyKey[]
 
   @@map("users")
 }
@@ -105,11 +107,11 @@ model Tip {
   senderId         String?  @map("sender_id")
   senderName       String?  @map("sender_name")
   recipientId      String   @map("recipient_id")
-  amount           Decimal  @db.Decimal(12, 2)
-  platformFee      Decimal  @default(0) @db.Decimal(12, 2) @map("platform_fee")
-  processingFee    Decimal  @default(0) @db.Decimal(12, 2) @map("processing_fee")
-  netAmount        Decimal  @default(0) @db.Decimal(12, 2) @map("net_amount")
-  totalCharged     Decimal  @default(0) @db.Decimal(12, 2) @map("total_charged")
+  amount           Decimal  @db.Decimal(18, 2)
+  platformFee      Decimal  @default(0) @db.Decimal(18, 2) @map("platform_fee")
+  processingFee    Decimal  @default(0) @db.Decimal(18, 2) @map("processing_fee")
+  netAmount        Decimal  @default(0) @db.Decimal(18, 2) @map("net_amount")
+  totalCharged     Decimal  @default(0) @db.Decimal(18, 2) @map("total_charged")
   currency         String   @default("NGN")
   message          String?
   category         String   @default("general")
@@ -125,6 +127,7 @@ model Tip {
   recipient   User         @relation("Recipient", fields: [recipientId], references: [id])
   transaction Transaction?
   feedback    Feedback?
+  ledgerEntries LedgerEntry[]
 
   @@index([recipientId])
   @@index([senderId])
@@ -137,7 +140,7 @@ model Tip {
 model Transaction {
   id              String   @id @default(cuid())
   tipId           String   @unique @map("tip_id")
-  amount          Decimal  @db.Decimal(12, 2)
+  amount          Decimal  @db.Decimal(18, 2)
   currency        String   @default("NGN")
   paymentMethod   String   @map("payment_method")
   monnifyResponse Json     @map("monnify_response")
@@ -150,16 +153,154 @@ model Transaction {
   @@map("transactions")
 }
 
+// ---------------------------------------------------------------------------
+// MONEY JOURNAL
+//
+// Every movement of money appends rows here inside the same transaction that
+// moves the balance. Before this existed, `User.totalAmount` was mutated
+// directly, so when the disbursement webhook and the reaper both refunded the
+// same withdrawal the duplicate credit was invisible: there was no record to
+// reconcile against and no way to tell a correct balance from a wrong one.
+//
+// Invariant: the legs of one entryGroupId always sum to zero. `debit` moves
+// value out of an account, `credit` moves it in, and `userId` is null for the
+// platform's own accounts (fees, Monnify settlement, tax). The reconciliation
+// job re-checks that invariant on every group, so a bad write is found even if
+// it was made by a code path that no longer exists.
+// ---------------------------------------------------------------------------
+
+enum LedgerAccount {
+  // Customer-facing
+  USER_AVAILABLE
+  // Assets held on behalf of the business until paid out
+  WITHDRAWAL_PENDING
+  // Owed to the payment provider
+  MONNIFY_RECEIVABLE
+  // Already handed to the provider, awaiting settlement
+  MONNIFY_PAYABLE
+  // Platform revenue
+  PLATFORM_FEE_REVENUE
+  WITHDRAWAL_FEE_REVENUE
+  // Withheld but not yet remitted to the tax authority
+  TAX_PAYABLE
+}
+
+enum LedgerDirection {
+  DEBIT
+  CREDIT
+}
+
+model LedgerEntry {
+  id           String          @id @default(cuid())
+  entryGroupId String          @map("entry_group_id")
+  account      LedgerAccount
+  direction    LedgerDirection
+  amount       Decimal         @db.Decimal(18, 2)
+  // Running balance for USER_AVAILABLE entries, so a single row can be
+  // checked against the user's balance without summing the whole history.
+  balanceAfter Decimal?        @db.Decimal(18, 2) @map("balance_after")
+  entryType    String          @map("entry_type")
+  // Null for platform accounts.
+  userId       String?         @map("user_id")
+  tipId        String?         @map("tip_id")
+  withdrawalId String?         @map("withdrawal_id")
+  reference    String
+  note         String?
+  createdAt    DateTime        @default(now()) @map("created_at")
+
+  // Every relation here is Restrict rather than SetNull on purpose. Cascading
+  // a delete would silently unlink ledger lines from the user, tip or
+  // withdrawal they describe, which is precisely the "money moved but no
+  // record of where it went" state this table exists to prevent. It also
+  // matches tips.recipient_id, which is already Restrict.
+  //
+  // The consequence is that a user, tip or withdrawal with ledger history
+  // cannot be hard-deleted. That is intentional: the correct operation is
+  // anonymisation, and test fixtures must TRUNCATE (which bypasses row-level
+  // triggers) rather than deleteMany.
+  user       User?      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  tip        Tip?       @relation(fields: [tipId], references: [id], onDelete: Restrict)
+  withdrawal Withdrawal? @relation(fields: [withdrawalId], references: [id], onDelete: Restrict)
+
+  @@index([entryGroupId])
+  @@index([entryGroupId, account])
+  @@index([userId, createdAt])
+  @@index([reference])
+  @@index([entryType])
+  @@map("ledger_entries")
+}
+
+// Relays a retried request to its first response instead of charging or
+// paying out twice. Written in the same transaction as the operation.
+model IdempotencyKey {
+  id             String    @id @default(cuid())
+  scope          String
+  key            String
+  userId         String?   @map("user_id")
+  // SHA-256 of the request body. Reusing a key with a different payload is a
+  // client bug and is rejected rather than silently returning the old answer.
+  requestHash    String    @map("request_hash")
+  responseStatus Int?      @map("response_status")
+  responseBody   Json?     @map("response_body")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  expiresAt      DateTime  @map("expires_at")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@unique([scope, key])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
+// Monnify retries a webhook until it gets a 2xx, so the same event legitimately
+// arrives many times. The unique constraint is what makes handling it twice
+// impossible at the storage layer rather than by careful coding.
+model ProcessedWebhookEvent {
+  id          String   @id @default(cuid())
+  provider    String   @default("monnify")
+  eventId     String   @map("event_id")
+  eventType   String   @map("event_type")
+  payloadHash String   @map("payload_hash")
+  status      String   @default("processed")
+  error       String?
+  receivedAt  DateTime @default(now()) @map("received_at")
+
+  @@unique([provider, eventId])
+  @@index([receivedAt])
+  @@map("processed_webhook_events")
+}
+
+model ReconciliationRun {
+  id               String    @id @default(cuid())
+  runType          String    @map("run_type")
+  status           String    @default("running")
+  startedAt        DateTime  @default(now()) @map("started_at")
+  completedAt      DateTime? @map("completed_at")
+  checkedCount     Int       @default(0) @map("checked_count")
+  discrepancyCount Int       @default(0) @map("discrepancy_count")
+  summary          Json?
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  @@index([runType, startedAt])
+  @@map("reconciliation_runs")
+}
+
 model Withdrawal {
   id              String   @id @default(cuid())
   userId          String   @map("user_id")
-  amount          Decimal  @db.Decimal(12, 2)
-  fee             Decimal  @default(0) @db.Decimal(12, 2)
-  netAmount       Decimal  @default(0) @db.Decimal(12, 2) @map("net_amount")
-  estimatedTax    Decimal  @default(0) @db.Decimal(12, 2) @map("estimated_tax")
+  amount          Decimal  @db.Decimal(18, 2)
+  fee             Decimal  @default(0) @db.Decimal(18, 2)
+  netAmount       Decimal  @default(0) @db.Decimal(18, 2) @map("net_amount")
+  estimatedTax    Decimal  @default(0) @db.Decimal(18, 2) @map("estimated_tax")
   bankCode        String   @map("bank_code")
   bankName        String   @map("bank_name")
+  // Superseded by accountNumberEncrypted. Kept only so the one-time backfill
+  // script has a source; new writes must not populate it, and
+  // backfillAccountNumbers.ts clears it once every row is encrypted.
   accountNumber   String   @map("account_number")
+  accountNumberEncrypted String? @map("account_number_encrypted")
+  accountNumberLast4     String? @map("account_number_last4")
+  accountNumberHash      String? @map("account_number_hash")
   accountName     String   @map("account_name")
   reference       String   @unique
   status          String   @default("pending")
@@ -167,12 +308,16 @@ model Withdrawal {
     processedAt     DateTime? @map("processed_at")
     failureReason   String?  @map("failure_reason")
     createdAt       DateTime @default(now()) @map("created_at")
-    updatedAt       DateTime @updatedAt @default(now()) @map("updated_at")
+    updatedAt       DateTime @default(now()) @map("updated_at")
 
   user User @relation(fields: [userId], references: [id])
 
+  ledgerEntries LedgerEntry[]
+
   @@index([userId])
   @@index([reference])
+  @@index([status])
+  @@index([accountNumberHash])
   @@map("withdrawals")
 }
 
@@ -182,7 +327,7 @@ model Team {
   memberId    String   @map("member_id")
   role        String   @default("staff")
   tipsReceived Int     @default(0) @map("tips_received")
-  totalAmount Decimal  @default(0) @db.Decimal(12, 2) @map("total_amount")
+  totalAmount Decimal  @default(0) @db.Decimal(18, 2) @map("total_amount")
   createdAt   DateTime @default(now()) @map("created_at")
 
   business User @relation("BusinessTeam", fields: [businessId], references: [id])
