@@ -14,6 +14,21 @@ import { getEnv } from '~/config/env'
 
 const router = Router()
 
+// Transactional mail is required for these flows (admin OTP, withdrawal PIN,
+// password reset). If Resend is not configured we must fail loudly rather than
+// fall back to logging the secret to stdout, which would leak OTPs and reset
+// links into production logs.
+function requireEmailDelivery() {
+  if (!getEnv().RESEND_API_KEY) {
+    console.error('[AUTH] RESEND_API_KEY is not configured; refusing to send security email')
+    throw new AppError(
+      'Email delivery is not configured. Please contact support.',
+      503,
+      'EMAIL_NOT_CONFIGURED'
+    )
+  }
+}
+
 router.post(
   '/register',
   authRateLimit,
@@ -166,25 +181,22 @@ router.post(
           },
         })
 
-        if (env.RESEND_API_KEY) {
-          const { Resend } = await import('resend')
-          const resend = new Resend(env.RESEND_API_KEY)
-          await resend.emails.send({
-            from: env.EMAIL_FROM,
-            to: user.email,
-            subject: 'Your tipfy admin sign-in code',
-            html: `
-              <div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;padding:32px">
-                <h2 style="margin:0 0 8px">Admin sign-in</h2>
-                <p style="color:#666;margin:0 0 24px">Use this code to finish signing in to the tipfy admin panel. It expires in 10 minutes.</p>
-                <div style="background:#F3F4F6;border-radius:12px;padding:20px;text-align:center;letter-spacing:8px;font-size:28px;font-weight:800;color:#1F2937">${otp}</div>
-                <p style="color:#999;margin:24px 0 0;font-size:13px">If you didn't try to sign in, someone has your password — change it immediately.</p>
-              </div>
-            `,
-          })
-        } else {
-          console.log(`[DEV] Admin login OTP for ${user.email}: ${otp}`)
-        }
+        requireEmailDelivery()
+        const { Resend } = await import('resend')
+        const resend = new Resend(env.RESEND_API_KEY)
+        await resend.emails.send({
+          from: env.EMAIL_FROM,
+          to: user.email,
+          subject: 'Your tipfy admin sign-in code',
+          html: `
+            <div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;padding:32px">
+              <h2 style="margin:0 0 8px">Admin sign-in</h2>
+              <p style="color:#666;margin:0 0 24px">Use this code to finish signing in to the tipfy admin panel. It expires in 10 minutes.</p>
+              <div style="background:#F3F4F6;border-radius:12px;padding:20px;text-align:center;letter-spacing:8px;font-size:28px;font-weight:800;color:#1F2937">${otp}</div>
+              <p style="color:#999;margin:24px 0 0;font-size:13px">If you didn't try to sign in, someone has your password — change it immediately.</p>
+            </div>
+          `,
+        })
 
         await logAuditEvent({
           userId: user.id,
@@ -495,25 +507,22 @@ router.post(
 
       const env = getEnv()
 
-      if (env.RESEND_API_KEY) {
-        const { Resend } = await import('resend')
-        const resend = new Resend(env.RESEND_API_KEY)
-        await resend.emails.send({
-          from: env.EMAIL_FROM,
-          to: user.email,
-          subject: 'Your tipfy verification code',
-          html: `
-            <div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;padding:32px">
-              <h2 style="margin:0 0 8px">Verify it's you</h2>
-              <p style="color:#666;margin:0 0 24px">Use this code to set your withdrawal PIN. It expires in 10 minutes.</p>
-              <div style="background:#F3F4F6;border-radius:12px;padding:20px;text-align:center;letter-spacing:8px;font-size:28px;font-weight:800;color:#1F2937">${otp}</div>
-              <p style="color:#999;margin:24px 0 0;font-size:13px">If you didn't request this, you can safely ignore this email.</p>
-            </div>
-          `,
-        })
-      } else {
-        console.log(`[DEV] Withdrawal PIN OTP for ${user.email}: ${otp}`)
-      }
+      requireEmailDelivery()
+      const { Resend } = await import('resend')
+      const resend = new Resend(env.RESEND_API_KEY)
+      await resend.emails.send({
+        from: env.EMAIL_FROM,
+        to: user.email,
+        subject: 'Your tipfy verification code',
+        html: `
+          <div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;padding:32px">
+            <h2 style="margin:0 0 8px">Verify it's you</h2>
+            <p style="color:#666;margin:0 0 24px">Use this code to set your withdrawal PIN. It expires in 10 minutes.</p>
+            <div style="background:#F3F4F6;border-radius:12px;padding:20px;text-align:center;letter-spacing:8px;font-size:28px;font-weight:800;color:#1F2937">${otp}</div>
+            <p style="color:#999;margin:24px 0 0;font-size:13px">If you didn't request this, you can safely ignore this email.</p>
+          </div>
+        `,
+      })
 
       await logAuditEvent({
         userId,
@@ -618,6 +627,11 @@ router.post(
       const { email } = req.body
       const env = getEnv()
 
+      // Checked up front: failing here hits both the known and unknown-email
+      // paths identically, so a misconfigured mailer can't become an account
+      // enumeration oracle.
+      requireEmailDelivery()
+
       // Always return success to prevent email enumeration
       const user = await db.user.findUnique({ where: { email } })
 
@@ -641,25 +655,21 @@ router.post(
 
       const resetUrl = `${env.FRONTEND_URL}/reset-password?token=${raw}`
 
-      if (env.RESEND_API_KEY) {
-        const { Resend } = await import('resend')
-        const resend = new Resend(env.RESEND_API_KEY)
-        await resend.emails.send({
-          from: env.EMAIL_FROM,
-          to: email,
-          subject: 'Reset your tipfy password',
-          html: `
-            <div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;padding:32px">
-              <h2 style="margin:0 0 8px">Reset your password</h2>
-              <p style="color:#666;margin:0 0 24px">Click the link below to set a new password. This link expires in 1 hour.</p>
-              <a href="${resetUrl}" style="display:inline-block;background:#2563EB;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600">Reset password</a>
-              <p style="color:#999;margin:24px 0 0;font-size:13px">If you didn't request this, you can safely ignore this email.</p>
-            </div>
-          `,
-        })
-      } else {
-        console.log(`[DEV] Password reset URL: ${resetUrl}`)
-      }
+      const { Resend } = await import('resend')
+      const resend = new Resend(env.RESEND_API_KEY)
+      await resend.emails.send({
+        from: env.EMAIL_FROM,
+        to: email,
+        subject: 'Reset your tipfy password',
+        html: `
+          <div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;padding:32px">
+            <h2 style="margin:0 0 8px">Reset your password</h2>
+            <p style="color:#666;margin:0 0 24px">Click the link below to set a new password. This link expires in 1 hour.</p>
+            <a href="${resetUrl}" style="display:inline-block;background:#2563EB;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600">Reset password</a>
+            <p style="color:#999;margin:24px 0 0;font-size:13px">If you didn't request this, you can safely ignore this email.</p>
+          </div>
+        `,
+      })
 
       await logAuditEvent({
         userId: user.id,
