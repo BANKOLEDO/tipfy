@@ -15,13 +15,15 @@ export default defineConfig({
     // matched, so every suite runs twice against the same live database.
     include: ['src/**/*.test.ts'],
     exclude: ['node_modules/**', 'dist/**'],
-    // Test files share the same live Neon DB and each file wipes all 'test+'
-    // rows in afterAll — run files serially so they can't delete each other's
-    // in-flight data.
+    // Every suite shares one database and each file's afterAll truncates it, so
+    // parallel files would delete each other's fixtures mid-run. Serial only.
     fileParallelism: false,
     setupFiles: [resolve(__dirname, 'src/__tests__/setup.ts')],
     env: {
-      RESEND_API_KEY: '',
+      // Truthy so the 2FA and reset paths actually run, but a value Resend
+      // would reject. Combined with the `resend` module mock in the suites,
+      // no test can send a real email even if the mock is removed.
+      RESEND_API_KEY: 're_test_not_a_real_key',
     },
   },
 })
