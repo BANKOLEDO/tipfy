@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import crypto from 'crypto'
 import bcrypt from 'bcryptjs'
 import { db } from '~/lib/db'
 import { createToken, verifyTokenAsync } from '~/lib/jwt'
@@ -165,8 +166,37 @@ router.post(
       // roles — the client must complete /auth/login/verify-otp.
       const isStaff = userRole === 'admin' || userRole === 'support'
       if (isStaff) {
-        await db.otp.deleteMany({
+        // Same reasoning as the withdrawal PIN: prior codes are retained, not
+        // deleted, so the attempt counter cannot be reset by simply logging in
+        // again. Without this, 5 guesses per login is a 5-guess-per-request
+        // oracle against a 6-digit code.
+        const COOLDOWN_MS = 60 * 1000
+        const MAX_PER_HOUR = 5
+        const MAX_FAILURES_PER_HOUR = 10
+        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000)
+
+        const recent = await db.otp.findMany({
+          where: { userId: user.id, purpose: 'admin_login', createdAt: { gte: oneHourAgo } },
+          select: { createdAt: true, attempts: true },
+        })
+
+        if (recent.length >= MAX_PER_HOUR) {
+          throw AppError.tooMany('Too many verification codes requested. Try again later.')
+        }
+
+        const lastIssued = recent[0]?.createdAt
+        if (lastIssued && Date.now() - lastIssued.getTime() < COOLDOWN_MS) {
+          throw AppError.tooMany('Please wait before requesting another code.')
+        }
+
+        const totalFailures = recent.reduce((sum, row) => sum + row.attempts, 0)
+        if (totalFailures >= MAX_FAILURES_PER_HOUR) {
+          throw AppError.tooMany('Too many incorrect attempts. Try again later.')
+        }
+
+        await db.otp.updateMany({
           where: { userId: user.id, purpose: 'admin_login', usedAt: null },
+          data: { usedAt: new Date() },
         })
 
         const otp = generateOTP(6)
@@ -320,7 +350,14 @@ router.post(
         throw AppError.tooMany('Too many incorrect attempts. Sign in again to get a new code.')
       }
 
-      if (hashToken(otp) !== otpRecord.otpHash) {
+      // Constant-time compare rather than !==, so a wrong code can't be
+      // recovered byte-by-byte from response timing.
+      const supplied = Buffer.from(hashToken(otp))
+      const stored = Buffer.from(otpRecord.otpHash)
+      const matches =
+        supplied.length === stored.length && crypto.timingSafeEqual(supplied, stored)
+
+      if (!matches) {
         await db.otp.update({
           where: { id: otpRecord.id },
           data: { attempts: { increment: 1 } },
@@ -337,6 +374,15 @@ router.post(
 
       const tokenHash = hashToken(token)
 
+      // Claim the OTP with a conditional write before minting the session, so
+      // two concurrent requests with the same valid code cannot both log in.
+      const claim = await db.otp.updateMany({
+        where: { id: otpRecord.id, usedAt: null },
+        data: { usedAt: new Date() },
+      })
+      if (claim.count === 0) {
+        throw AppError.badRequest('Verification code has already been used.')
+      }
       await db.$transaction([
         db.session.create({
           data: {
@@ -413,6 +459,8 @@ router.post('/logout', async (req, res, next) => {
   }
 })
 
+// Deliberately tolerant of anonymous callers: the client calls this on boot to
+// decide whether it is signed in, so it answers { user: null } rather than 401.
 router.get('/me', async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization
@@ -441,12 +489,29 @@ router.get('/me', async (req, res, next) => {
         rating: true,
         withdrawalPinHash: true,
         isVerified: true,
+        isActive: true,
         role: true,
         createdAt: true,
       },
     })
 
+    // verifyTokenAsync only proves the JWT is well-formed. The Session row and
+    // isActive are checked here so logout and admin deactivation actually
+    // revoke access, exactly as `resolveLiveSession` does for every other
+    // route.
     if (!user) {
+      return res.json({ success: true, data: { user: null } })
+    }
+
+    if (!user.isActive) {
+      return res.json({ success: true, data: { user: null } })
+    }
+
+    const session = await db.session.findUnique({
+      where: { tokenHash: hashToken(token) },
+      select: { id: true, expiresAt: true },
+    })
+    if (!session || session.expiresAt <= new Date()) {
       return res.json({ success: true, data: { user: null } })
     }
 
@@ -488,9 +553,38 @@ router.post(
         throw AppError.badRequest('Withdrawal PIN already set')
       }
 
-      // Invalidate any outstanding OTPs for this purpose
-      await db.otp.deleteMany({
+      // Retain (don't delete) prior OTPs. Deleting them reset `attempts` to 0
+      // on every new code, which voided the 5-attempt lockout and let an
+      // attacker mint unlimited fresh 5-guess windows against a 6-digit space.
+      const COOLDOWN_MS = 60 * 1000
+      const MAX_PER_HOUR = 5
+      const MAX_FAILURES_PER_HOUR = 10
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000)
+
+      const recent = await db.otp.findMany({
+        where: { userId, purpose: 'withdrawal_pin', createdAt: { gte: oneHourAgo } },
+        select: { createdAt: true, attempts: true },
+      })
+
+      if (recent.length >= MAX_PER_HOUR) {
+        throw AppError.tooMany('Too many verification codes requested. Try again later.')
+      }
+
+      const lastIssued = recent[0]?.createdAt
+      if (lastIssued && Date.now() - lastIssued.getTime() < COOLDOWN_MS) {
+        throw AppError.tooMany('Please wait before requesting another code.')
+      }
+
+      // Lock the account out based on failures across *all* codes issued in the
+      // window, not just the current one.
+      const totalFailures = recent.reduce((sum, row) => sum + row.attempts, 0)
+      if (totalFailures >= MAX_FAILURES_PER_HOUR) {
+        throw AppError.tooMany('Too many incorrect attempts. Try again later.')
+      }
+
+      await db.otp.updateMany({
         where: { userId, purpose: 'withdrawal_pin', usedAt: null },
+        data: { usedAt: new Date() },
       })
 
       const otp = generateOTP(6)
@@ -578,7 +672,14 @@ router.post(
         throw AppError.tooMany('Too many incorrect attempts. Request a new code.')
       }
 
-      if (hashToken(otp) !== otpRecord.otpHash) {
+      // Constant-time compare rather than !==, so a wrong code can't be
+      // recovered byte-by-byte from response timing.
+      const supplied = Buffer.from(hashToken(otp))
+      const stored = Buffer.from(otpRecord.otpHash)
+      const matches =
+        supplied.length === stored.length && crypto.timingSafeEqual(supplied, stored)
+
+      if (!matches) {
         await db.otp.update({
           where: { id: otpRecord.id },
           data: { attempts: { increment: 1 } },
@@ -589,16 +690,21 @@ router.post(
       const env = getEnv()
       const pinHash = await bcrypt.hash(pin, env.BCRYPT_ROUNDS)
 
-      await db.$transaction([
-        db.user.update({
+      // Consume the OTP with a conditional write so two concurrent submissions
+      // of the same valid code cannot both set a PIN.
+      await db.$transaction(async (tx) => {
+        const claim = await tx.otp.updateMany({
+          where: { id: otpRecord.id, usedAt: null },
+          data: { usedAt: new Date() },
+        })
+        if (claim.count === 0) {
+          throw AppError.badRequest('Verification code has already been used.')
+        }
+        await tx.user.update({
           where: { id: userId },
           data: { withdrawalPinHash: pinHash },
-        }),
-        db.otp.update({
-          where: { id: otpRecord.id },
-          data: { usedAt: new Date() },
-        }),
-      ])
+        })
+      })
 
       await logAuditEvent({
         userId,
@@ -705,29 +811,30 @@ router.post(
         throw AppError.badRequest('Invalid or expired reset token')
       }
 
-      if (resetToken.usedAt) {
-        throw AppError.badRequest('Reset token has already been used')
-      }
-
-      if (new Date() > resetToken.expiresAt) {
-        throw AppError.badRequest('Reset token has expired')
-      }
-
       const env = getEnv()
       const passwordHash = await bcrypt.hash(password, env.BCRYPT_ROUNDS)
 
-      await db.$transaction([
-        db.user.update({
+      // Claim the token with a conditional write *inside* the transaction.
+      // A read-then-write let two concurrent submissions of the same link both
+      // observe usedAt = null and both proceed, so the second overwrote the
+      // password the first had just set.
+      const now = new Date()
+      await db.$transaction(async (tx) => {
+        const claim = await tx.passwordResetToken.updateMany({
+          where: { tokenHash, usedAt: null, expiresAt: { gt: now } },
+          data: { usedAt: now },
+        })
+        if (claim.count === 0) {
+          throw AppError.badRequest('Invalid or expired reset token')
+        }
+
+        await tx.user.update({
           where: { id: resetToken.userId },
           data: { passwordHash },
-        }),
-        db.passwordResetToken.update({
-          where: { id: resetToken.id },
-          data: { usedAt: new Date() },
-        }),
+        })
         // Invalidate all sessions for this user
-        db.session.deleteMany({ where: { userId: resetToken.userId } }),
-      ])
+        await tx.session.deleteMany({ where: { userId: resetToken.userId } })
+      })
 
       await logAuditEvent({
         userId: resetToken.userId,
