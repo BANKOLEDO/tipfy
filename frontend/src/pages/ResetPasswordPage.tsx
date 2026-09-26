@@ -22,6 +22,12 @@ export default function ResetPasswordPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (password !== confirmPassword) return addToast('error', 'Passwords do not match')
+    // Mirror the server's rules (backend/src/lib/validations.ts resetPasswordSchema)
+    // so users get instant feedback instead of a rejection after submitting.
+    if (password.length < 8) return addToast('error', 'Password must be at least 8 characters')
+    if (!/[A-Z]/.test(password)) return addToast('error', 'Password must contain at least one uppercase letter')
+    if (!/[a-z]/.test(password)) return addToast('error', 'Password must contain at least one lowercase letter')
+    if (!/[0-9]/.test(password)) return addToast('error', 'Password must contain at least one number')
     setLoading(true)
     try {
       await api('/auth/reset-password', { method: 'POST', body: { token, password } })
@@ -85,7 +91,7 @@ export default function ResetPasswordPage() {
 
               <form onSubmit={handleSubmit} className="space-y-3 mt-6">
                 <Input
-                  light label="New password" type={showPassword ? 'text' : 'password'} placeholder="Min. 8 characters"
+                  light label="New password" type={showPassword ? 'text' : 'password'} placeholder="Min. 8 chars, upper, lower & number"
                   leftIcon={<Lock className="h-4 w-4" />}
                   rightIcon={<button type="button" onClick={() => setShowPassword(!showPassword)} className="text-gray-400 hover:text-dark-text transition-colors">{showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>}
                   value={password} onChange={(e) => setPassword(e.target.value)}
