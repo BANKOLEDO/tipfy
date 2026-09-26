@@ -513,7 +513,14 @@ router.get(
 // can't both pass the check and double-credit the recipient.
 // Returns true if this call performed the completion, false if it was a no-op
 // (tip was already completed/failed by a racing request).
-async function completeTip(tip: any, paymentMethod: string, monnifyReference: string): Promise<boolean> {
+export async function completeTip(tip: any, paymentMethod: string, monnifyReference: string): Promise<boolean> {
+  // Credit the persisted netAmount rather than recomputing
+  // `amount - platformFee`. Postgres has already rounded `amount` to 2dp, so
+  // for a >2dp input the recomputed figure diverged from tip.netAmount by a
+  // kobo — and the two are reported as "total earned" by different endpoints,
+  // so the discrepancy was invisible to any reconciliation query.
+  const netCredit = Number(tip.netAmount ?? 0)
+
   const applied = await db.$transaction(async (tx) => {
     const claim = await tx.tip.updateMany({
       where: { id: tip.id, status: 'pending' },
@@ -526,8 +533,6 @@ async function completeTip(tip: any, paymentMethod: string, monnifyReference: st
     })
 
     if (claim.count === 0) return false
-
-    const netCredit = Number(tip.amount) - Number(tip.platformFee || 0)
 
     await tx.transaction.create({
       data: {
@@ -559,28 +564,42 @@ async function completeTip(tip: any, paymentMethod: string, monnifyReference: st
 
   if (!applied) return false
 
-  await logAuditEvent({
-    action: AuditActions.TIP_COMPLETE,
-    resource: 'tip',
-    resourceId: tip.id,
-    metadata: { amount: Number(tip.amount) },
-  })
+  // The money is already committed at this point. A failure in the audit write
+  // or the notification must not turn a settled payment into a 5xx, or the
+  // client will believe the tip failed and the payer may retry.
+  try {
+    await logAuditEvent({
+      userId: tip.recipientId,
+      action: AuditActions.TIP_COMPLETE,
+      resource: 'tip',
+      resourceId: tip.id,
+      metadata: { amount: Number(tip.amount), netCredit },
+    })
+  } catch (err) {
+    console.error(`[TIP] Failed to audit completed tip ${tip.reference}:`, err)
+  }
 
-  const sender = tip.senderId
-    ? await db.user.findUnique({ where: { id: tip.senderId }, select: { displayName: true } })
-    : null
-  await notifyTipReceived(
-    tip.recipientId,
-    sender?.displayName || 'Anonymous',
-    Number(tip.amount),
-    tip.message,
-  )
+  try {
+    const sender = tip.senderId
+      ? await db.user.findUnique({ where: { id: tip.senderId }, select: { displayName: true } })
+      : null
+    // Notify with the credited net figure, not the gross tip amount — the
+    // recipient's balance moved by netCredit, not by tip.amount.
+    await notifyTipReceived(
+      tip.recipientId,
+      sender?.displayName || 'Anonymous',
+      netCredit,
+      tip.message,
+    )
+  } catch (err) {
+    console.error(`[TIP] Failed to notify recipient for tip ${tip.reference}:`, err)
+  }
 
   return true
 }
 
 // Marks a tip failed atomically — same concurrency-safe guard as completeTip.
-async function failTip(tip: any): Promise<boolean> {
+export async function failTip(tip: any): Promise<boolean> {
   const applied = await db.tip.updateMany({
     where: { id: tip.id, status: 'pending' },
     data: { status: 'failed' },
@@ -649,15 +668,30 @@ router.get('/:tipReference/verify', tipRateLimit, async (req, res, next) => {
     const paymentReference = verification.responseBody?.paymentReference || tipReference
 
     if (verification.requestSuccessful && paymentStatus === 'PAID') {
-      if (tip.status === 'pending') {
+      // completeTip guards on a conditional 'pending' -> 'completed' write, so
+      // it is safe to call for any non-terminal status. This matters for tips
+      // the reaper already marked 'expired': the money is real, so it must
+      // still be credited rather than skipped.
+      if (!['completed', 'failed', 'reversed'].includes(tip.status)) {
         await completeTip(tip, verification.responseBody?.paymentMethod || 'CARD', paymentReference)
       }
-      return res.json({ success: true, data: { status: 'completed', tip: tipSummary } })
+
+      // Report what actually happened. Returning a hardcoded 'completed' here
+      // told a tipper their money landed even when the credit was skipped.
+      const settled = await db.tip.findUnique({
+        where: { id: tip.id },
+        select: { status: true },
+      })
+      return res.json({ success: true, data: { status: settled?.status || tip.status, tip: tipSummary } })
     }
 
     if (paymentStatus === 'FAILED' || paymentStatus === 'EXPIRED') {
-      if (tip.status === 'pending') await failTip(tip)
-      return res.json({ success: true, data: { status: 'failed', tip: tipSummary } })
+      if (!['completed', 'reversed'].includes(tip.status)) await failTip(tip)
+      const settled = await db.tip.findUnique({
+        where: { id: tip.id },
+        select: { status: true },
+      })
+      return res.json({ success: true, data: { status: settled?.status || 'failed', tip: tipSummary } })
     }
 
     // Still not paid / not confirmed — leave as pending
@@ -673,7 +707,14 @@ router.post(
   async (req, res, next) => {
     try {
       const signature = req.headers['monnify-signature'] as string
-      const rawBody = (req as any).rawBody || JSON.stringify(req.body)
+      const rawBody = (req as any).rawBody
+
+      // Fail closed. Re-serialising req.body would produce different bytes
+      // than Monnify signed (key order, whitespace, unicode escaping), so the
+      // signature check would reject legitimate webhooks.
+      if (!rawBody) {
+        throw AppError.badRequest('Unable to verify webhook payload')
+      }
 
       if (!verifyWebhookSignature(rawBody, signature)) {
         throw AppError.badRequest('Invalid webhook signature')
