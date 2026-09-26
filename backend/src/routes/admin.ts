@@ -410,37 +410,42 @@ router.delete('/tips/:tipId', async (req, res, next) => {
         status: true,
         amount: true,
         platformFee: true,
+        netAmount: true,
         recipientId: true,
       },
     })
     if (!tip) throw AppError.notFound('Tip not found')
 
     if (tip.status === 'completed') {
-      const netCredit = Number(tip.amount) - Number(tip.platformFee || 0)
+      const netCredit = Number(tip.netAmount ?? 0) || Number(tip.amount) - Number(tip.platformFee || 0)
 
       await db.$transaction(async (tx) => {
-        const recipient = await tx.user.findUnique({
+        // Atomic decrements, not read-modify-write of an absolute value. The
+        // old version lost updates under READ COMMITTED (two concurrent
+        // deletes both read the same balance and both wrote it back) and used
+        // Math.max(0, ...) which silently clamped the debt instead of
+        // recording that the recipient is owed money.
+        await tx.user.updateMany({
           where: { id: tip.recipientId },
-          select: { totalAmount: true, totalTipsReceived: true },
+          data: {
+            totalAmount: { decrement: netCredit },
+            totalTipsReceived: { decrement: 1 },
+          },
         })
 
-        if (recipient) {
-          const newBalance = Math.max(
-            0,
-            Number(recipient.totalAmount) - netCredit
-          )
-          await tx.user.update({
-            where: { id: tip.recipientId },
-            data: {
-              totalAmount: newBalance,
-              totalTipsReceived: Math.max(0, recipient.totalTipsReceived - 1),
-            },
-          })
-        }
-
-        await tx.transaction.deleteMany({ where: { tipId } })
+        // The Transaction row is the only evidence that this specific Monnify
+        // payment settled, and the only ledger entry for the credit we just
+        // reversed. Deleting it makes provider reconciliation impossible.
+        // Record the reversal instead.
+        await tx.transaction.updateMany({
+          where: { tipId },
+          data: { status: 'reversed' },
+        })
         await tx.feedback.deleteMany({ where: { tipId } })
-        await tx.tip.delete({ where: { id: tipId } })
+        await tx.tip.update({
+          where: { id: tipId },
+          data: { status: 'reversed' },
+        })
       })
     } else {
       await db.$transaction(async (tx) => {
