@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { CheckCircle, Star, ArrowLeft, Heart, XCircle } from 'lucide-react'
+import { CheckCircle, Star, ArrowLeft, Heart, XCircle, Clock, Loader2, HelpCircle } from 'lucide-react'
 import NairaCoinIcon from '~/components/NairaCoinIcon'
 import { api, ApiError } from '~/lib/api'
-import { useUIStore } from '~/lib/store'
+import { useUIStore, useAuthStore } from '~/lib/store'
 import { formatNaira } from '~/lib/utils'
 import { Button } from '~/components/ui/Button'
 import { Textarea } from '~/components/ui/Textarea'
@@ -18,8 +18,9 @@ export default function PaymentCompletePage() {
   const [comment, setComment] = useState('')
   const [submitted, setSubmitted] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [paymentStatus, setPaymentStatus] = useState<'completed' | 'failed' | 'pending' | null>(null)
+  const [paymentStatus, setPaymentStatus] = useState<'completed' | 'failed' | 'pending' | 'unknown' | null>(null)
   const [tip, setTip] = useState<any>(null)
+  const token = useAuthStore((s) => s.token)
   const addToast = useUIStore((s) => s.addToast)
 
   useEffect(() => {
@@ -28,11 +29,16 @@ export default function PaymentCompletePage() {
     api<{ status: 'completed' | 'failed' | 'pending'; tip?: any }>(`/tips/${ref}/verify`)
       .then((res) => {
         if (cancelled) return
-        setPaymentStatus(res?.status || 'pending')
+        // Anything unexpected must not be treated as a success.
+        const status = res?.status
+        setPaymentStatus(
+          status === 'completed' || status === 'failed' || status === 'pending' ? status : 'unknown'
+        )
         setTip(res?.tip || null)
       })
       .catch(() => {
-        if (!cancelled) setPaymentStatus('pending')
+        // A network error or 404 is not proof of success.
+        if (!cancelled) setPaymentStatus('unknown')
       })
     return () => { cancelled = true }
   }, [ref])
@@ -64,23 +70,64 @@ export default function PaymentCompletePage() {
       <main className="max-w-md mx-auto px-4 py-10">
         <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}>
           <div className="text-center mb-8">
-            <div className={`h-16 w-16 rounded-full flex items-center justify-center mx-auto mb-6 ${paymentStatus === 'failed' ? 'bg-error/10' : 'bg-success/10'}`}>
-              {paymentStatus === 'failed'
-                ? <XCircle className="h-8 w-8 text-error" />
-                : <CheckCircle className="h-8 w-8 text-success" />}
+            <div className={`h-16 w-16 rounded-full flex items-center justify-center mx-auto mb-6 ${
+              paymentStatus === 'failed' ? 'bg-error/10'
+              : paymentStatus === 'completed' ? 'bg-success/10'
+              : paymentStatus === 'unknown' ? 'bg-gray-100'
+              : 'bg-amber-100'
+            }`}>
+              {paymentStatus === null && <Loader2 className="h-8 w-8 text-gray-400 animate-spin" />}
+              {paymentStatus === 'completed' && <CheckCircle className="h-8 w-8 text-success" />}
+              {paymentStatus === 'failed' && <XCircle className="h-8 w-8 text-error" />}
+              {paymentStatus === 'pending' && <Clock className="h-8 w-8 text-amber-500" />}
+              {paymentStatus === 'unknown' && <HelpCircle className="h-8 w-8 text-gray-400" />}
             </div>
             <h1 className="text-2xl font-bold text-dark-text mb-2">
-              {paymentStatus === 'failed' ? 'Payment failed' : 'Thank you!'}
+              {paymentStatus === null ? 'Confirming your payment' : (
+                paymentStatus === 'failed' ? 'Payment failed'
+                : paymentStatus === 'completed' ? 'Thank you!'
+                : paymentStatus === 'pending' ? 'Payment processing'
+                : 'Could not confirm payment'
+              )}
             </h1>
             <p className="text-gray-500 text-sm">
-              {paymentStatus === 'failed'
-                ? 'We could not confirm your payment. Please try again.'
-                : 'Your tip has been processed successfully.'}
+              {paymentStatus === null ? 'Hang on while we check with the payment provider.' : (
+                paymentStatus === 'failed' ? 'We could not confirm your payment. Please try again.'
+                : paymentStatus === 'completed' ? 'Your tip has been processed successfully.'
+                : paymentStatus === 'pending'
+                  ? 'Your payment is still being confirmed. This page can take a minute to update.'
+                  : 'We were unable to verify this reference. If you were charged, contact support with the reference below.'
+              )}
             </p>
             {ref && <p className="text-gray-400 text-xs mt-2 font-mono">Ref: {ref}</p>}
           </div>
 
-          {paymentStatus === 'failed' ? (
+          {paymentStatus === null ? (
+            <div className="bg-white rounded-3xl p-6 shadow-[0_4px_20px_rgba(0,0,0,0.04)] border border-gray-200/60 flex items-center justify-center py-10">
+              <Loader2 className="h-6 w-6 text-gray-300 animate-spin" />
+            </div>
+          ) : paymentStatus === 'unknown' ? (
+            <div className="bg-white rounded-3xl p-6 shadow-[0_4px_20px_rgba(0,0,0,0.04)] border border-gray-200/60 text-center py-8">
+              <p className="text-sm font-medium text-gray-600">
+                Double-check the reference above, then try again.
+              </p>
+              <button onClick={() => window.location.reload()}
+                className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-accent hover:text-accent-hover">
+                Retry
+              </button>
+            </div>
+          ) : paymentStatus === 'pending' ? (
+            <div className="bg-white rounded-3xl p-6 shadow-[0_4px_20px_rgba(0,0,0,0.04)] border border-gray-200/60 text-center py-8">
+              <Clock className="h-8 w-8 text-amber-500 mx-auto mb-3" />
+              <p className="text-sm font-medium text-gray-600">
+                No need to pay again. Refresh this page in a moment to see your receipt.
+              </p>
+              <button onClick={() => window.location.reload()}
+                className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-accent hover:text-accent-hover">
+                Refresh status
+              </button>
+            </div>
+          ) : paymentStatus === 'failed' ? (
             <div className="bg-white rounded-3xl p-6 shadow-[0_4px_20px_rgba(0,0,0,0.04)] border border-gray-200/60 text-center py-8">
               <p className="text-sm font-medium text-gray-600">
                 If you believe this is an error, please contact support.
@@ -91,7 +138,7 @@ export default function PaymentCompletePage() {
                 </Link>
               </div>
             </div>
-          ) : paymentStatus === 'completed' && tip ? (
+          ) : paymentStatus === 'completed' && tip && !submitted ? (
             <>
               <div className="bg-white rounded-3xl p-6 shadow-[0_4px_20px_rgba(0,0,0,0.04)] border border-gray-200/60 mb-5">
                 <div className="flex items-center justify-between mb-4">
@@ -123,7 +170,8 @@ export default function PaymentCompletePage() {
                 </div>
               </div>
               <div className="bg-white rounded-3xl p-6 shadow-[0_4px_20px_rgba(0,0,0,0.04)] border border-gray-200/60">
-              <form onSubmit={handleFeedback} className="space-y-5">
+                {token ? (
+                <form onSubmit={handleFeedback} className="space-y-5">
                 <div className="text-center">
                   <p className="text-sm font-medium text-gray-600 mb-4">How was your experience?</p>
                   <div className="flex items-center justify-center gap-2">
@@ -173,14 +221,30 @@ export default function PaymentCompletePage() {
                   className="w-full text-center text-sm text-gray-400 hover:text-dark-text transition-colors">
                   Skip for now
                 </button>
-              </form>
+                </form>
+                ) : (
+                  // The API only accepts feedback from the signed-in sender of
+                  // this tip, so don't offer a form that would just 403.
+                  <div className="text-center py-2">
+                    <Star className="h-6 w-6 text-amber-400 mx-auto mb-2" />
+                    <p className="text-sm font-medium text-gray-600 mb-4">
+                      Sign in with the account you used to tip to leave a rating.
+                    </p>
+                    <Link to={`/login?next=${encodeURIComponent(`/payment-complete?ref=${ref}`)}`}
+                      className="inline-flex items-center justify-center px-5 h-11 bg-accent text-white rounded-2xl text-sm font-bold hover:bg-accent-hover transition-colors">
+                      Sign in to rate
+                    </Link>
+                  </div>
+                )}
               </div>
             </>
           ) : (
             <div className="bg-white rounded-3xl p-6 shadow-[0_4px_20px_rgba(0,0,0,0.04)] border border-gray-200/60 text-center py-8">
               <Heart className="h-8 w-8 text-accent mx-auto mb-3" />
               <p className="text-sm font-medium text-gray-600">
-                {rating > 0 ? 'Thanks for your feedback!' : 'Thanks! You can always rate later.'}
+                {submitted
+                  ? 'Thanks for your feedback!'
+                  : 'Thanks! You can always rate later.'}
               </p>
             </div>
           )}
