@@ -69,11 +69,23 @@ router.get('/', authenticate, async (req, res, next) => {
         withdrawalFee: computeWithdrawalFee(monthlyWithdrawals),
         freeWithdrawalsPerMonth: getEnv().FREE_WITHDRAWALS_PER_MONTH,
         withdrawals: withdrawals.map((w) => ({
-          ...w,
+          id: w.id,
+          reference: w.reference,
           amount: Number(w.amount),
           fee: Number(w.fee || 0),
           netAmount: Number(w.netAmount || 0),
           estimatedTax: Number(w.estimatedTax || 0),
+          bankCode: w.bankCode,
+          bankName: w.bankName,
+          accountName: w.accountName,
+          status: w.status,
+          failureReason: w.failureReason,
+          processedAt: w.processedAt,
+          createdAt: w.createdAt,
+          // accountNumber is masked, and monnifyResponse is deliberately
+          // omitted: spreading the whole row leaked the provider payload,
+          // which contains the unmasked destination account number that the
+          // masking two lines below was meant to hide.
           accountNumber:
             w.accountNumber.slice(0, 3) + '****' + w.accountNumber.slice(-3),
         })),
@@ -368,7 +380,14 @@ router.post(
 router.post('/webhook', async (req, res, next) => {
   try {
     const signature = req.headers['monnify-signature'] as string
-    const rawBody = (req as any).rawBody || JSON.stringify(req.body)
+    const rawBody = (req as any).rawBody
+
+    // Fail closed. Re-serialising req.body would produce different bytes than
+    // Monnify signed (key order, whitespace, unicode escaping), so the
+    // signature check would reject legitimate webhooks.
+    if (!rawBody) {
+      throw AppError.badRequest('Unable to verify webhook payload')
+    }
 
     if (!verifyWebhookSignature(rawBody, signature)) {
       throw AppError.badRequest('Invalid webhook signature')
@@ -377,12 +396,22 @@ router.post('/webhook', async (req, res, next) => {
     const payload = req.body
     const { eventType, eventData } = payload
 
+    // Allowlist rather than the raw payload. A disbursement event carries the
+    // destination account number and account-holder name, and GET /admin/audit
+    // is readable by the support role — so persisting req.body verbatim would
+    // expose unmasked PII that every other serializer masks.
     await logAuditEvent({
       action: 'withdrawal.webhook',
       resource: 'withdrawal',
       resourceId: eventData?.reference || 'unknown',
       ipAddress: req.ip,
-      metadata: { eventType, payload },
+      metadata: {
+        eventType,
+        reference: eventData?.reference,
+        status: eventData?.status,
+        amount: eventData?.amount,
+        currency: eventData?.currency,
+      },
     })
 
     if (eventType === 'SUCCESSFUL_DISBURSEMENT' || eventType === 'DISBURSEMENT_SUCCESS') {
@@ -390,19 +419,29 @@ router.post('/webhook', async (req, res, next) => {
         return res.status(400).json({ success: false, message: 'Missing reference' })
       }
 
-      const withdrawal = await db.withdrawal.findFirst({
-        where: { reference: eventData.reference },
+      // Monnify retries until it gets a 2xx, so the same event can arrive
+      // concurrently. Claim the row with a conditional write and only act if
+      // this request is the one that flipped it out of 'processing'.
+      const claimed = await db.withdrawal.updateMany({
+        where: { reference: eventData.reference, status: 'processing' },
+        data: { status: 'completed', processedAt: new Date() },
       })
 
-        if (withdrawal && withdrawal.status === 'processing') {
-          await db.withdrawal.update({
-            where: { id: withdrawal.id },
-            data: {
-              status: 'completed',
-              processedAt: new Date(),
-            },
+      if (claimed.count > 0) {
+        const withdrawal = await db.withdrawal.findFirst({
+          where: { reference: eventData.reference },
+          select: { userId: true, amount: true },
+        })
+        if (withdrawal) {
+          await logAuditEvent({
+            action: AuditActions.WITHDRAWAL_COMPLETE,
+            resource: 'withdrawal',
+            resourceId: eventData.reference,
+            ipAddress: req.ip,
+            metadata: { amount: Number(withdrawal.amount), source: 'webhook' },
           })
-        await notifyWithdrawalCompleted(withdrawal.userId, Number(withdrawal.amount))
+          await notifyWithdrawalCompleted(withdrawal.userId, Number(withdrawal.amount))
+        }
       }
     }
 
@@ -411,29 +450,48 @@ router.post('/webhook', async (req, res, next) => {
         return res.status(400).json({ success: false, message: 'Missing reference' })
       }
 
-      const withdrawal = await db.withdrawal.findFirst({
+      const existing = await db.withdrawal.findFirst({
         where: { reference: eventData.reference },
+        select: { userId: true, amount: true },
       })
 
-      if (withdrawal && withdrawal.status === 'processing') {
-        // Refund balance on confirmed failure
-        await db.$transaction([
-          db.withdrawal.update({
-            where: { id: withdrawal.id },
-            data: {
-              status: 'failed',
-              failureReason: eventData?.responseMessage || 'Disbursement failed',
-            },
-          }),
-          db.user.update({
-            where: { id: withdrawal.userId },
-            data: { totalAmount: { increment: withdrawal.amount } },
-          }),
-        ])
+      // Refund balance on confirmed failure. The claim is a conditional write
+      // inside the transaction: a read-then-write would let two deliveries of
+      // the same event both pass the 'processing' check and both credit the
+      // balance back, leaving the user with the money and the payout.
+      const refunded = await db.$transaction(async (tx) => {
+        const claim = await tx.withdrawal.updateMany({
+          where: { reference: eventData.reference, status: 'processing' },
+          data: {
+            status: 'failed',
+            failureReason: eventData?.responseMessage || 'Disbursement failed',
+          },
+        })
+        if (claim.count === 0) return false
+        if (existing) {
+          await tx.user.update({
+            where: { id: existing.userId },
+            data: { totalAmount: { increment: existing.amount } },
+          })
+        }
+        return true
+      })
 
+      if (refunded && existing) {
+        await logAuditEvent({
+          action: AuditActions.WITHDRAWAL_FAIL,
+          resource: 'withdrawal',
+          resourceId: eventData.reference,
+          ipAddress: req.ip,
+          metadata: {
+            amount: Number(existing.amount),
+            reason: eventData?.responseMessage || 'Disbursement failed',
+            source: 'webhook',
+          },
+        })
         await notifyWithdrawalFailed(
-          withdrawal.userId,
-          Number(withdrawal.amount),
+          existing.userId,
+          Number(existing.amount),
           eventData?.responseMessage || 'Disbursement failed'
         )
       }
