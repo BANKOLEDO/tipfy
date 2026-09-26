@@ -15,6 +15,17 @@ vi.mock('~/lib/crypto', async (importOriginal) => {
   }
 })
 
+// Stub the mailer so the 2FA and reset paths are exercised without a network
+// call or a real API key. auth.ts imports resend dynamically, so the module id
+// has to match that specifier.
+vi.mock('resend', () => ({
+  Resend: class {
+    emails = {
+      send: vi.fn(async () => ({ data: { id: 'test-email-id' }, error: null })),
+    }
+  },
+}))
+
 let app: ReturnType<typeof createApp>
 let request: ReturnType<typeof getTestApp>
 
@@ -159,7 +170,7 @@ describe('Admin tip actions', () => {
     expect(updated?.category).toBe('content')
   })
 
-  it('deletes a completed tip and reverses the credited ledger', async () => {
+  it('reverses a completed tip and its ledger entries instead of deleting it', async () => {
     const { user, token } = await staffSession()
     const amount = 5000
     const platformFee = 250
@@ -201,15 +212,32 @@ describe('Admin tip actions', () => {
 
     expect(res.status).toBe(200)
 
-    const [tipAfter, transactionAfter, userAfter] = await Promise.all([
+    // The tip and its transaction row survive as `reversed`. The ledger is
+    // append-only, so the money history has to stay readable; deleting the row
+    // would leave orphaned ledger legs pointing at nothing and destroy the
+    // audit trail.
+    const [tipAfter, transactionAfter, userAfter, legs] = await Promise.all([
       db.tip.findUnique({ where: { id: tip.id } }),
       db.transaction.findUnique({ where: { tipId: tip.id } }),
       db.user.findUnique({ where: { id: user.id }, select: { totalAmount: true, totalTipsReceived: true } }),
+      db.ledgerEntry.findMany({ where: { tipId: tip.id }, orderBy: { createdAt: 'asc' } }),
     ])
-    expect(tipAfter).toBeNull()
-    expect(transactionAfter).toBeNull()
+    expect(tipAfter?.status).toBe('reversed')
+    expect(transactionAfter).not.toBeNull()
     expect(Number(userAfter?.totalAmount || 0)).toBe(0)
     expect(userAfter?.totalTipsReceived).toBe(0)
+
+    // A balancing reversing entry, and the whole thing still nets to zero.
+    expect(legs.map((l) => l.entryType).sort()).toEqual([
+      'TIP_CREDIT_REVERSED',
+      'TIP_FEE_REVERSED',
+      'TIP_SETTLEMENT_REVERSED',
+    ])
+    const net = legs.reduce(
+      (sum, l) => sum + (l.direction === 'CREDIT' ? Number(l.amount) : -Number(l.amount)),
+      0,
+    )
+    expect(net).toBe(0)
   })
 
   it('blocks regular users from admin endpoints', async () => {
