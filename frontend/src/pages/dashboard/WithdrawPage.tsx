@@ -63,7 +63,11 @@ export default function WithdrawPage() {
   const checkRef = useRef(0)
 
   const hasPin = Boolean(user?.hasWithdrawalPin)
-  const maxAmount = Math.floor(Number(user?.totalAmount || 0))
+  // The server is authoritative: user.totalAmount in the auth store is a
+  // cached value that drifts after tips/withdrawals and ignores in-flight
+  // withdrawals, which would let users submit amounts the API rejects.
+  const [availableBalance, setAvailableBalance] = useState<number | null>(null)
+  const maxAmount = availableBalance ?? Math.floor(Number(user?.totalAmount || 0))
   const quickAmounts = [1000, 5000, 10000, 20000]
   const amt = parseInt(amount)
   const netAmount = amt && !isNaN(amt) && amt > 0 ? Math.max(0, amt - withdrawalFee) : 0
@@ -73,6 +77,7 @@ export default function WithdrawPage() {
       const list = Array.isArray(data) ? data : data.withdrawals || []
       setWithdrawals(list)
       if (!Array.isArray(data)) {
+        setAvailableBalance(Math.floor(Number(data.balance || 0)))
         setWithdrawalFee(Number(data.withdrawalFee || 0))
         setMonthlyWithdrawals(Number(data.monthlyWithdrawals || 0))
         setFreePerMonth(Number(data.freeWithdrawalsPerMonth || 3))
