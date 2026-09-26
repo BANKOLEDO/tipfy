@@ -22,6 +22,14 @@ export default function LoginPage() {
     setLoading(true)
     try {
       const data = await api('/auth/login', { method: 'POST', body: { email, password } }) as any
+      // Staff/admin logins are gated behind an emailed OTP and return no
+      // token. Storing `undefined` here would leave a broken session.
+      if (data?.requiresOtp) {
+        addToast('error', 'This account requires a verification code. Please sign in at the admin panel.')
+        setLoading(false)
+        return
+      }
+      if (!data?.token) throw new Error('Login did not return a session. Please try again.')
       setToken(data.token)
       setAuth(data.user, data.token)
       navigate('/dashboard')
