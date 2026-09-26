@@ -113,13 +113,34 @@ export function assertBalanced(groupId: string, legs: LedgerLeg[]): void {
 type Tx = Prisma.TransactionClient
 
 /** Posts a balanced group. Must be called inside the caller's transaction. */
+/**
+ * Drop legs worth nothing before they are written.
+ *
+ * A zero platform fee (free plan), a zero withdrawal fee (a user is under the
+ * monthly free allowance) and a zero tax deduction are all normal, but the
+ * `amount > 0` constraint and the zero-sum check have nothing to say about a
+ * 0.00 row. Dropping them here rather than in each composer means a caller
+ * cannot post a leg that the ledger will reject.
+ */
+function withoutZeroLegs(legs: LedgerLeg[]): LedgerLeg[] {
+  return legs.filter((leg) => dec(leg.amount).gt(0))
+}
+
 export async function postLedger(
   tx: Tx,
   groupId: string,
   legs: LedgerLeg[],
 ): Promise<void> {
-  assertBalanced(groupId, legs)
-  await tx.ledgerEntry.createMany({ data: legs.map((leg) => ({ ...leg, entryGroupId: groupId, amount: dec(leg.amount), balanceAfter: leg.balanceAfter == null ? null : dec(leg.balanceAfter) })) })
+  const kept = withoutZeroLegs(legs)
+  assertBalanced(groupId, kept)
+  await tx.ledgerEntry.createMany({
+    data: kept.map((leg) => ({
+      ...leg,
+      entryGroupId: groupId,
+      amount: dec(leg.amount),
+      balanceAfter: leg.balanceAfter == null ? null : dec(leg.balanceAfter),
+    })),
+  })
 }
 
 export interface TipMoney {
