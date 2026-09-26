@@ -158,9 +158,12 @@ ALTER TABLE "idempotency_keys" ADD CONSTRAINT "idempotency_keys_user_id_fkey" FO
 -- but skips the initial table scan, which would otherwise need an ACCESS
 -- EXCLUSIVE lock on a live table. The VALIDATE pass at the end checks history
 -- without blocking reads or writes.
+-- 'reversed' is a real terminal state, not a hypothetical: admin.ts sets it
+-- when reversing a completed tip. Tip status is a plain String in the schema,
+-- so nothing but this constraint stops the column and the code disagreeing.
 ALTER TABLE "tips"
   ADD CONSTRAINT "tips_status_check"
-  CHECK ("status" IN ('pending', 'completed', 'failed', 'expired')) NOT VALID;
+  CHECK ("status" IN ('pending', 'completed', 'failed', 'expired', 'reversed')) NOT VALID;
 
 ALTER TABLE "withdrawals"
   ADD CONSTRAINT "withdrawals_status_check"
@@ -197,15 +200,17 @@ ALTER TABLE "ledger_entries"
   ADD CONSTRAINT "ledger_entries_amount_positive"
   CHECK ("amount" > 0);
 
--- balance_after is only meaningful for the customer account, and a credit
--- there can never leave the balance negative.
+-- balance_after is a running balance, so it may only be recorded against the
+-- one account that has one. Its sign is deliberately unconstrained: a debit can
+-- leave the customer positive (spending 1000 of 5000), exactly zero (spending
+-- it all) or negative (a claw back they cannot absorb). An earlier version of
+-- this constraint asserted CREDIT => >= 0 and DEBIT => <= 0, which reads
+-- plausible but rejects the most ordinary withdrawal there is.
 ALTER TABLE "ledger_entries"
   ADD CONSTRAINT "ledger_entries_balance_consistent"
   CHECK (
     "balance_after" IS NULL
-    OR ("account" <> 'USER_AVAILABLE')
-    OR ("direction" = 'CREDIT' AND "balance_after" >= 0)
-    OR ("direction" = 'DEBIT'  AND "balance_after" <= 0)
+    OR ("account" = 'USER_AVAILABLE')
   );
 
 -- The customer account must always name its owner, and no platform account may
