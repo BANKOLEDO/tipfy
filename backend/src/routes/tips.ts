@@ -16,6 +16,14 @@ import { verifyWebhookSignature } from '~/services/monnify'
 import { notifyTipReceived, notifyTipFailed, notifyFeedbackReceived } from '~/services/notifications'
 import { computeTipFees } from '~/lib/fees'
 import { getEnv } from '~/config/env'
+import { dec, postLedger, tipSettlementLegs } from '~/lib/ledger'
+import {
+  claimIdempotencyKey,
+  hashRequest,
+  readIdempotencyKey,
+  replayIdempotent,
+} from '~/lib/idempotency'
+import { claimWebhookEvent } from '~/lib/webhookEvents'
 
 const router = Router()
 
@@ -29,6 +37,20 @@ router.post(
     try {
       const { recipientId, amount, message, isAnonymous, senderName, senderEmail, category } =
         req.body
+
+      // A client that retries because it never saw the response would otherwise
+      // charge the tipper twice, so the key is claimed in the same transaction
+      // that creates the tip.
+      const idemKey = readIdempotencyKey(req.headers['idempotency-key'])
+      const idemScope = 'tip:create'
+      const idemHash = hashRequest(req.body)
+      if (idemKey) {
+        const replay = await replayIdempotent<Record<string, unknown>>(idemScope, idemKey, idemHash)
+        if (replay) {
+          res.status(replay.status).json(replay.body)
+          return
+        }
+      }
 
       const recipient = await db.user.findUnique({
         where: { id: recipientId },
@@ -50,22 +72,35 @@ router.post(
       // is credited amount minus TipFY's commission.
       const fees = computeTipFees(amount, recipient.plan, recipient.planExpiresAt)
 
-      const tip = await db.tip.create({
-        data: {
-          reference,
-          senderId,
-          senderName: isAnonymous ? null : senderName || null,
-          recipientId,
-          amount,
-          platformFee: fees.platformFee,
-          processingFee: fees.processingFee,
-          netAmount: fees.netToRecipient,
-          totalCharged: fees.totalCharge,
-          message: message || null,
-          category: category || 'general',
-          isAnonymous: isAnonymous || false,
-          status: 'pending',
-        },
+      const tip = await db.$transaction(async (tx) => {
+        if (idemKey) {
+          const claimed = await claimIdempotencyKey(tx, idemScope, idemKey, senderId, idemHash)
+          if (!claimed) {
+            // Lost the race. The winner's response is not stored yet, so tell
+            // the client to retry rather than creating a second tip.
+            throw AppError.conflict(
+              'A request with this Idempotency-Key is already in progress. Retry shortly.',
+            )
+          }
+        }
+
+        return tx.tip.create({
+          data: {
+            reference,
+            senderId,
+            senderName: isAnonymous ? null : senderName || null,
+            recipientId,
+            amount,
+            platformFee: fees.platformFee,
+            processingFee: fees.processingFee,
+            netAmount: fees.netToRecipient,
+            totalCharged: fees.totalCharge,
+            message: message || null,
+            category: category || 'general',
+            isAnonymous: isAnonymous || false,
+            status: 'pending',
+          },
+        })
       })
 
       const env = getEnv()
@@ -115,7 +150,7 @@ router.post(
         metadata: { amount, recipientId },
       })
 
-      res.status(201).json({
+      const responseBody = {
         success: true,
         data: {
           tip: {
@@ -135,7 +170,20 @@ router.post(
           monnifyReference:
             paymentResponse.responseBody?.transactionReference || null,
         },
-      })
+      }
+
+      // Stored only after the gateway accepted the payment, so a replay
+      // returns the real checkout URL rather than a tip with nowhere to pay.
+      if (idemKey) {
+        await db.idempotencyKey.update({
+          where: { scope_key: { scope: idemScope, key: idemKey } },
+          data: { responseStatus: 201, responseBody },
+        }).catch((err) => {
+          console.error(`[TIP] Failed to store idempotent response for ${reference}:`, err)
+        })
+      }
+
+      res.status(201).json(responseBody)
     } catch (error) {
       next(error)
     }
@@ -519,7 +567,7 @@ export async function completeTip(tip: any, paymentMethod: string, monnifyRefere
   // for a >2dp input the recomputed figure diverged from tip.netAmount by a
   // kobo — and the two are reported as "total earned" by different endpoints,
   // so the discrepancy was invisible to any reconciliation query.
-  const netCredit = Number(tip.netAmount ?? 0)
+  const netCredit = dec(tip.netAmount)
 
   const applied = await db.$transaction(async (tx) => {
     const claim = await tx.tip.updateMany({
@@ -544,20 +592,43 @@ export async function completeTip(tip: any, paymentMethod: string, monnifyRefere
           monnifyReference,
           platformFee: Number(tip.platformFee || 0),
           processingFee: Number(tip.processingFee || 0),
-          netAmount: netCredit,
+          // Kept as a JSON number so the stored shape does not change; the
+          // balance itself is moved as a Decimal below.
+          netAmount: netCredit.toNumber(),
         } as any,
         status: 'completed',
         completedAt: new Date(),
       },
     })
 
-    await tx.user.update({
+    const updatedRecipient = await tx.user.update({
       where: { id: tip.recipientId },
       data: {
         totalTipsReceived: { increment: 1 },
-        totalAmount: { increment: netCredit },
-      },
+        // Decimal, so the increment is applied by Postgres rather than by a
+        // JavaScript float.
+        totalAmount: { increment: netCredit },      },
+      select: { totalAmount: true },
     })
+
+    // Journal entry for the same movement, in the same transaction. A group
+    // that does not balance throws and rolls the credit back, so the balance
+    // and its explanation can never disagree.
+    await postLedger(
+      tx,
+      `tip:${tip.id}`,
+      tipSettlementLegs(
+        {
+          id: tip.id,
+          reference: tip.reference,
+          amount: dec(tip.amount),
+          platformFee: dec(tip.platformFee),
+          netAmount: netCredit,
+          recipientId: tip.recipientId,
+        },
+        updatedRecipient.totalAmount,
+      ),
+    )
 
     return true
   })
@@ -573,7 +644,7 @@ export async function completeTip(tip: any, paymentMethod: string, monnifyRefere
       action: AuditActions.TIP_COMPLETE,
       resource: 'tip',
       resourceId: tip.id,
-      metadata: { amount: Number(tip.amount), netCredit },
+      metadata: { amount: Number(tip.amount), netCredit: netCredit.toNumber() },
     })
   } catch (err) {
     console.error(`[TIP] Failed to audit completed tip ${tip.reference}:`, err)
@@ -588,7 +659,7 @@ export async function completeTip(tip: any, paymentMethod: string, monnifyRefere
     await notifyTipReceived(
       tip.recipientId,
       sender?.displayName || 'Anonymous',
-      netCredit,
+      netCredit.toNumber(),
       tip.message,
     )
   } catch (err) {
@@ -722,6 +793,20 @@ router.post(
 
       const payload: MonnifyWebhookPayload = req.body
       const { eventType, eventData } = payload
+
+      // Monnify retries until it gets a 2xx, so the same event arrives
+      // repeatedly. Only the first delivery does any work. completeTip's
+      // conditional claim already prevents a double credit; this keeps a
+      // replay from producing a second audit entry for one payment.
+      const { claimed } = await claimWebhookEvent({
+        provider: 'monnify',
+        eventId: eventData.transactionReference || '',
+        eventType: eventType || 'unknown',
+        payload,
+      })
+      if (!claimed) {
+        return res.status(200).json({ success: true, data: { duplicate: true } })
+      }
 
       await logAuditEvent({
         action: AuditActions.PAYMENT_WEBHOOK,

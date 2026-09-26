@@ -13,7 +13,11 @@
     "db:push": "cross-env NODE_OPTIONS=\"--dns-result-order=ipv4first\" prisma db push",
     "db:seed": "cross-env NODE_OPTIONS=\"--dns-result-order=ipv4first\" tsx prisma/seed.ts",
     "db:studio": "prisma studio",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "db:migrate:deploy": "cross-env NODE_OPTIONS=\"--dns-result-order=ipv4first\" prisma migrate deploy",
+    "db:migrate:status": "cross-env NODE_OPTIONS=\"--dns-result-order=ipv4first\" prisma migrate status",
+    "db:baseline": "cross-env NODE_OPTIONS=\"--dns-result-order=ipv4first\" prisma migrate resolve --applied 0_init_baseline",
+    "db:backfill:accounts": "cross-env NODE_OPTIONS=\"--dns-result-order=ipv4first\" tsx prisma/backfillAccountNumbers.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",

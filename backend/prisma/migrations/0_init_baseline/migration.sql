@@ -1,16 +1,12 @@
 -- Baseline for the pre-existing database.
 --
--- This database was created with `prisma db push`, so Prisma has no migration
--- history for it and no _prisma_migrations table. This file is a faithful
--- snapshot of the schema `db push` produced, which lets the incremental
+-- The database was created with `prisma db push`, so Prisma has no migration
+-- history for it and no _prisma_migrations table. This snapshot lets the
 -- migrations that follow be applied to it safely.
 --
--- DO NOT RUN THIS FILE. It is already applied to the live database. Prisma
--- must be told it is applied without executing it:
+-- DO NOT RUN: it is already applied. Tell Prisma without executing:
 --
 --   npx prisma migrate resolve --applied 0_init_baseline
---
--- Running it would attempt to create every table and fail on the first one.
 --
 -- Generated with:
 --   prisma migrate diff --from-empty --to-schema-datamodel <schema> --script

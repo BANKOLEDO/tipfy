@@ -154,19 +154,16 @@ model Transaction {
 }
 
 // ---------------------------------------------------------------------------
-// MONEY JOURNAL
+// Money journal.
 //
-// Every movement of money appends rows here inside the same transaction that
-// moves the balance. Before this existed, `User.totalAmount` was mutated
-// directly, so when the disbursement webhook and the reaper both refunded the
-// same withdrawal the duplicate credit was invisible: there was no record to
-// reconcile against and no way to tell a correct balance from a wrong one.
+// Every balance change appends rows here in the same transaction that moves the
+// balance. Without it a duplicate credit is invisible: there was no record to
+// reconcile against, so a correct balance could not be told from a wrong one.
 //
-// Invariant: the legs of one entryGroupId always sum to zero. `debit` moves
-// value out of an account, `credit` moves it in, and `userId` is null for the
-// platform's own accounts (fees, Monnify settlement, tax). The reconciliation
-// job re-checks that invariant on every group, so a bad write is found even if
-// it was made by a code path that no longer exists.
+// Invariant: the legs of one entryGroupId sum to zero. Debit moves value out,
+// credit moves it in, and userId is null for the platform's own accounts.
+// The reconciliation job re-checks every group, so a bad write is found even if
+// the code that made it is long gone.
 // ---------------------------------------------------------------------------
 
 enum LedgerAccount {
@@ -208,16 +205,12 @@ model LedgerEntry {
   note         String?
   createdAt    DateTime        @default(now()) @map("created_at")
 
-  // Every relation here is Restrict rather than SetNull on purpose. Cascading
-  // a delete would silently unlink ledger lines from the user, tip or
-  // withdrawal they describe, which is precisely the "money moved but no
-  // record of where it went" state this table exists to prevent. It also
-  // matches tips.recipient_id, which is already Restrict.
+  // Restrict, not SetNull: cascading a delete would unlink ledger lines from
+  // the user, tip or withdrawal they describe. Matches tips.recipient_id,
+  // which is already Restrict.
   //
-  // The consequence is that a user, tip or withdrawal with ledger history
-  // cannot be hard-deleted. That is intentional: the correct operation is
-  // anonymisation, and test fixtures must TRUNCATE (which bypasses row-level
-  // triggers) rather than deleteMany.
+  // So a row with ledger history cannot be hard-deleted. Use anonymisation
+  // instead, and have test fixtures TRUNCATE, which bypasses row triggers.
   user       User?      @relation(fields: [userId], references: [id], onDelete: Restrict)
   tip        Tip?       @relation(fields: [tipId], references: [id], onDelete: Restrict)
   withdrawal Withdrawal? @relation(fields: [withdrawalId], references: [id], onDelete: Restrict)
@@ -294,10 +287,11 @@ model Withdrawal {
   estimatedTax    Decimal  @default(0) @db.Decimal(18, 2) @map("estimated_tax")
   bankCode        String   @map("bank_code")
   bankName        String   @map("bank_name")
-  // Superseded by accountNumberEncrypted. Kept only so the one-time backfill
-  // script has a source; new writes must not populate it, and
-  // backfillAccountNumbers.ts clears it once every row is encrypted.
-  accountNumber   String   @map("account_number")
+  // Superseded by accountNumberEncrypted, and nullable so new rows can leave
+  // it NULL instead of writing plaintext. backfillAccountNumbers.ts encrypts
+  // the legacy values and then sets this to NULL; readAccountNumber() in
+  // lib/crypto.ts handles both states.
+  accountNumber   String?  @map("account_number")
   accountNumberEncrypted String? @map("account_number_encrypted")
   accountNumberLast4     String? @map("account_number_last4")
   accountNumberHash      String? @map("account_number_hash")

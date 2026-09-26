@@ -8,14 +8,18 @@ import { createApp } from '~/app'
 import { getEnv } from '~/config/env'
 import { startPendingTipReaper } from '~/jobs/expirePendingTips'
 import { startWithdrawalReaper } from '~/jobs/resolveStuckWithdrawals'
+import { startReconciliationJob } from '~/jobs/reconcileMoney'
 
 const env = getEnv()
 const app = createApp()
 
 const PORT = env.PORT
 
+// All three elect a single leader via an advisory lock, so scaling out does not
+// multiply the work. See jobs/leaderLock.ts.
 startPendingTipReaper()
 startWithdrawalReaper()
+startReconciliationJob()
 
 app.listen(PORT, () => {
   console.log(`🚀 TipFY API running on port ${PORT}`)

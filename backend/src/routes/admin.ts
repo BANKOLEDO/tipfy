@@ -6,6 +6,8 @@ import { validate } from '~/middleware/validate'
 import { logAuditEvent, AuditActions } from '~/lib/audit'
 import { updateTipSchema, withdrawalAdminActionSchema } from '~/lib/validations'
 import { notifyWithdrawalFailed } from '~/services/notifications'
+import { dec, postLedger, tipReversalLegs, withdrawalRefundLegs } from '~/lib/ledger'
+import { maskAccountNumber, readAccountNumber, blindIndex } from '~/lib/crypto'
 
 const router = Router()
 
@@ -204,7 +206,19 @@ router.get('/users/:userId', async (req, res, next) => {
     const [tipsReceived, tipsSent, withdrawals, feedbackCount] = await Promise.all([
       db.tip.count({ where: { recipientId: userId } }),
       db.tip.count({ where: { senderId: userId } }),
-      db.withdrawal.findMany({ where: { userId }, orderBy: { createdAt: 'desc' }, take: 10 }),
+      db.withdrawal.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+        // Explicit list: spreading the row would hand the client the
+        // account-number ciphertext and the raw Monnify payload.
+        select: {
+          id: true, amount: true, fee: true, netAmount: true, estimatedTax: true,
+          bankCode: true, bankName: true, accountName: true, reference: true,
+          status: true, failureReason: true, processedAt: true, createdAt: true,
+          accountNumber: true, accountNumberEncrypted: true,
+        },
+      }),
       db.feedback.count({ where: { recipientId: userId } }),
     ])
 
@@ -213,10 +227,21 @@ router.get('/users/:userId', async (req, res, next) => {
       data: {
         user: { ...user, totalAmount: Number(user.totalAmount), rating: Number(user.rating) },
         stats: { tipsReceived, tipsSent, withdrawals: withdrawals.length, feedbackCount },
-        recentWithdrawals: withdrawals.map(w => ({
-          ...w,
+        recentWithdrawals: withdrawals.map((w) => ({
+          id: w.id,
+          reference: w.reference,
           amount: Number(w.amount),
-          accountNumber: w.accountNumber.slice(0, 3) + '****' + w.accountNumber.slice(-3),
+          fee: Number(w.fee || 0),
+          netAmount: Number(w.netAmount || 0),
+          estimatedTax: Number(w.estimatedTax || 0),
+          bankCode: w.bankCode,
+          bankName: w.bankName,
+          accountName: w.accountName,
+          status: w.status,
+          failureReason: w.failureReason,
+          processedAt: w.processedAt,
+          createdAt: w.createdAt,
+          accountNumber: maskAccountNumber(readAccountNumber(w)),
         })),
       },
     })
@@ -417,7 +442,7 @@ router.delete('/tips/:tipId', async (req, res, next) => {
     if (!tip) throw AppError.notFound('Tip not found')
 
     if (tip.status === 'completed') {
-      const netCredit = Number(tip.netAmount ?? 0) || Number(tip.amount) - Number(tip.platformFee || 0)
+      const netCredit = dec(tip.netAmount)
 
       await db.$transaction(async (tx) => {
         // Atomic decrements, not read-modify-write of an absolute value. The
@@ -425,22 +450,40 @@ router.delete('/tips/:tipId', async (req, res, next) => {
         // deletes both read the same balance and both wrote it back) and used
         // Math.max(0, ...) which silently clamped the debt instead of
         // recording that the recipient is owed money.
-        await tx.user.updateMany({
+        const debitedUser = await tx.user.update({
           where: { id: tip.recipientId },
           data: {
             totalAmount: { decrement: netCredit },
             totalTipsReceived: { decrement: 1 },
           },
+          select: { totalAmount: true },
         })
 
         // The Transaction row is the only evidence that this specific Monnify
-        // payment settled, and the only ledger entry for the credit we just
-        // reversed. Deleting it makes provider reconciliation impossible.
-        // Record the reversal instead.
+        // payment settled. Deleting it makes provider reconciliation
+        // impossible, so the reversal is recorded instead.
         await tx.transaction.updateMany({
           where: { tipId },
           data: { status: 'reversed' },
         })
+
+        // Mirror the settlement in the journal, so the balance and the ledger
+        // still agree after the reversal.
+        if (debitedUser) {
+          await postLedger(
+            tx,
+            `tip-reversal:${tip.id}`,
+            tipReversalLegs({
+              id: tip.id,
+              reference: tip.reference,
+              amount: dec(tip.amount),
+              platformFee: dec(tip.platformFee),
+              netAmount: netCredit,
+              recipientId: tip.recipientId,
+            }),
+          )
+        }
+
         await tx.feedback.deleteMany({ where: { tipId } })
         await tx.tip.update({
           where: { id: tipId },
@@ -483,9 +526,16 @@ router.get('/withdrawals', async (req, res, next) => {
     if (search) {
       where.OR = [
         { reference: { contains: search, mode: 'insensitive' } },
-        { accountNumber: { contains: search } },
         { bankName: { contains: search, mode: 'insensitive' } },
+        { accountName: { contains: search, mode: 'insensitive' } },
       ]
+      // Account numbers are stored as ciphertext, so they cannot be matched
+      // with `contains`. A full 10-digit number is matched exactly against the
+      // keyed blind index instead, which also means an admin can no longer
+      // probe for partial account numbers that exist in the system.
+      if (/^\d{10}$/.test(search.trim())) {
+        where.OR.push({ accountNumberHash: blindIndex(search.trim()) } as any)
+      }
     }
 
     const [withdrawals, total] = await Promise.all([
@@ -494,7 +544,8 @@ router.get('/withdrawals', async (req, res, next) => {
         select: {
           id: true, amount: true, fee: true, netAmount: true, estimatedTax: true,
           bankCode: true, bankName: true,
-          accountNumber: true, accountName: true, reference: true,
+          accountNumber: true, accountNumberEncrypted: true,
+          accountName: true, reference: true,
           status: true, failureReason: true, processedAt: true, createdAt: true,
           user: { select: { id: true, username: true, displayName: true, email: true } },
         },
@@ -513,7 +564,7 @@ router.get('/withdrawals', async (req, res, next) => {
           fee: Number(w.fee || 0),
           netAmount: Number(w.netAmount || 0),
           estimatedTax: Number(w.estimatedTax || 0),
-          accountNumber: w.accountNumber.slice(0, 3) + '****' + w.accountNumber.slice(-3),
+            accountNumber: maskAccountNumber(readAccountNumber(w)),
         })),
         pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
       },
@@ -538,8 +589,11 @@ router.post(
 
       const withdrawal = await db.withdrawal.findUnique({
         where: { id: withdrawalId },
-        select: { id: true, reference: true, status: true, amount: true, userId: true },
-      })
+      select: {
+        id: true, reference: true, status: true, amount: true, userId: true,
+        fee: true, netAmount: true, estimatedTax: true,
+      },
+    })
       if (!withdrawal) throw AppError.notFound('Withdrawal not found')
 
       if (withdrawal.status === 'processing') {
@@ -563,14 +617,32 @@ router.post(
           },
         })
 
-        if (claim.count === 0) return false
+      if (claim.count === 0) return false
 
-        await tx.user.update({
-          where: { id: withdrawal.userId },
-          data: { totalAmount: { increment: withdrawal.amount } },
-        })
-        return true
+      const refundedUser = await tx.user.update({
+        where: { id: withdrawal.userId },
+        data: { totalAmount: { increment: withdrawal.amount } },
+        select: { totalAmount: true },
       })
+
+      await postLedger(
+        tx,
+        `withdrawal-refund:${withdrawal.id}`,
+        withdrawalRefundLegs(
+          {
+            id: withdrawal.id,
+            reference: withdrawal.reference,
+            userId: withdrawal.userId,
+            amount: withdrawal.amount,
+            fee: withdrawal.fee,
+            estimatedTax: withdrawal.estimatedTax,
+            netAmount: withdrawal.netAmount,
+          },
+          refundedUser.totalAmount,
+        ),
+      )
+      return true
+    })
 
       if (!refunded) {
         throw AppError.conflict('Withdrawal has already been processed')

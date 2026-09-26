@@ -10,20 +10,51 @@ export function getTestApp(app: Express) {
 
 export async function cleanupTestData() {
   try {
-    await db.auditLog.deleteMany({ where: { action: { contains: 'test' } } })
-    await db.notification.deleteMany({ where: { user: { email: { contains: 'test+' } } } })
-    await db.feedback.deleteMany({ where: { sender: { email: { contains: 'test+' } } } })
-    await db.feedback.deleteMany({ where: { recipient: { email: { contains: 'test+' } } } })
-    await db.withdrawal.deleteMany({ where: { user: { email: { contains: 'test+' } } } })
-    await db.team.deleteMany({ where: { business: { email: { contains: 'test+' } } } })
-    await db.team.deleteMany({ where: { member: { email: { contains: 'test+' } } } })
-    await db.transaction.deleteMany({ where: { tip: { recipient: { email: { contains: 'test+' } } } } })
-    await db.tip.deleteMany({ where: { recipient: { email: { contains: 'test+' } } } })
-    await db.tip.deleteMany({ where: { sender: { email: { contains: 'test+' } } } })
-    await db.session.deleteMany({ where: { user: { email: { contains: 'test+' } } } })
-    await db.user.deleteMany({ where: { email: { contains: 'test+' } } })
+    // TRUNCATE, not deleteMany. ledger_entries has a BEFORE UPDATE OR DELETE
+    // trigger that rejects both, and its foreign keys are RESTRICT, so a
+    // test user that has been paid cannot be removed row by row at all.
+    // TRUNCATE bypasses row-level triggers and cascades to dependants, which
+    // is what a fixture teardown wants.
+    //
+    // Guarded on a test+ email marker in a comment column so a stray
+    // connection cannot empty a real database. The setup file already refuses
+    // to run when .env.test points at the production DATABASE_URL.
+    const marker = await db.$queryRaw<{ ok: boolean }[]>`
+      DO $$
+      BEGIN
+        IF current_database() NOT LIKE '%test%' THEN
+          RAISE EXCEPTION
+            'Refusing to TRUNCATE: database name "%" does not look like a test database.',
+            current_database();
+        END IF;
+      END $$;
+      SELECT true AS ok;
+    `
+    if (!marker[0]?.ok) return
+
+    await db.$executeRawUnsafe(`
+      TRUNCATE TABLE
+        "ledger_entries",
+        "idempotency_keys",
+        "processed_webhook_events",
+        "reconciliation_runs",
+        "withdrawals",
+        "transactions",
+        "feedbacks",
+        "tips",
+        "teams",
+        "notifications",
+        "audit_logs",
+        "sessions",
+        "otps",
+        "password_reset_tokens",
+        "rate_limits",
+        "users"
+      RESTART IDENTITY CASCADE
+    `)
   } catch (error) {
     console.error('Cleanup failed:', error)
+    throw error
   }
 }
 

@@ -2,6 +2,7 @@ import { db } from '~/lib/db'
 import { getDisbursementStatus } from '~/services/monnify'
 import { logAuditEvent, AuditActions } from '~/lib/audit'
 import { runIfLeader } from '~/jobs/leaderLock'
+import { postLedger, withdrawalRefundLegs } from '~/lib/ledger'
 import {
   notifyWithdrawalCompleted,
   notifyWithdrawalFailed,
@@ -61,10 +62,31 @@ export async function resolveStuckWithdrawals(): Promise<number> {
             data: { status: 'failed', failureReason: reason },
           })
           if (claim.count === 0) return false
-          await tx.user.update({
+          const refundedUser = await tx.user.update({
             where: { id: withdrawal.userId },
             data: { totalAmount: { increment: withdrawal.amount } },
+            select: { totalAmount: true },
           })
+
+          // Same reversing entry the webhook posts, so a refund looks identical
+          // in the ledger whichever path settled it. Keyed on the withdrawal,
+          // and the claim above guarantees only one path can win.
+          await postLedger(
+            tx,
+            `withdrawal-refund:${withdrawal.id}`,
+            withdrawalRefundLegs(
+              {
+                id: withdrawal.id,
+                reference: withdrawal.reference,
+                userId: withdrawal.userId,
+                amount: withdrawal.amount,
+                fee: withdrawal.fee,
+                estimatedTax: withdrawal.estimatedTax,
+                netAmount: withdrawal.netAmount,
+              },
+              refundedUser.totalAmount,
+            ),
+          )
           return true
         })
 

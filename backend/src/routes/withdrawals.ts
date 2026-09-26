@@ -12,6 +12,15 @@ import { initiateDisbursement, verifyWebhookSignature, validateAccount } from '~
 import { notifyWithdrawalCompleted, notifyWithdrawalProcessing, notifyWithdrawalFailed } from '~/services/notifications'
 import { computeWithdrawalFee, estimateWithholdingTax } from '~/lib/fees'
 import { getEnv } from '~/config/env'
+import { postLedger, withdrawalDebitLegs, withdrawalRefundLegs } from '~/lib/ledger'
+import { encryptAccountNumber, readAccountNumber, maskAccountNumber } from '~/lib/crypto'
+import {
+  claimIdempotencyKey,
+  hashRequest,
+  readIdempotencyKey,
+  replayIdempotent,
+} from '~/lib/idempotency'
+import { claimWebhookEvent } from '~/lib/webhookEvents'
 
 const router = Router()
 
@@ -86,8 +95,12 @@ router.get('/', authenticate, async (req, res, next) => {
           // omitted: spreading the whole row leaked the provider payload,
           // which contains the unmasked destination account number that the
           // masking two lines below was meant to hide.
-          accountNumber:
-            w.accountNumber.slice(0, 3) + '****' + w.accountNumber.slice(-3),
+          accountNumber: maskAccountNumber(
+            readAccountNumber({
+              accountNumberEncrypted: w.accountNumberEncrypted,
+              accountNumber: w.accountNumber,
+            }),
+          ),
         })),
       },
     })
@@ -164,6 +177,19 @@ router.post(
 
       if (!user) throw AppError.notFound('User not found')
 
+      // Payouts are the one request where a retry is most expensive, so the
+      // key is claimed in the same transaction that debits the balance.
+      const idemKey = readIdempotencyKey(req.headers['idempotency-key'])
+      const idemScope = 'withdrawal:create'
+      const idemHash = hashRequest(req.body)
+      if (idemKey) {
+        const replay = await replayIdempotent<Record<string, unknown>>(idemScope, idemKey, idemHash)
+        if (replay) {
+          res.status(replay.status).json(replay.body)
+          return
+        }
+      }
+
       const pendingWithdrawals = await db.withdrawal.aggregate({
         where: {
           userId,
@@ -228,11 +254,22 @@ router.post(
 
       const bankName = BANKS[bankCode] || 'Unknown Bank'
       const reference = `WD-${uuid().slice(0, 8).toUpperCase()}`
+      // Stored only as ciphertext; the plaintext column is left NULL.
+      const encrypted = encryptAccountNumber(accountNumber)
 
       // Atomically debit balance and create withdrawal. The conditional
       // updateMany guards against concurrent withdrawals racing past each
       // other (TOCTOU) and driving the balance negative.
       const withdrawal = await db.$transaction(async (tx) => {
+        if (idemKey) {
+          const claimed = await claimIdempotencyKey(tx, idemScope, idemKey, userId, idemHash)
+          if (!claimed) {
+            throw AppError.conflict(
+              'A request with this Idempotency-Key is already in progress. Retry shortly.',
+            )
+          }
+        }
+
         const debited = await tx.user.updateMany({
           where: { id: userId, totalAmount: { gte: amount } },
           data: { totalAmount: { decrement: amount } },
@@ -260,7 +297,7 @@ router.post(
           )
         }
 
-        return tx.withdrawal.create({
+        const withdrawal = await tx.withdrawal.create({
           data: {
             userId,
             amount,
@@ -269,12 +306,43 @@ router.post(
             estimatedTax,
             bankCode,
             bankName,
-            accountNumber,
+            // Left NULL on purpose: the destination account is stored only as
+            // ciphertext. See the backfill script for legacy rows.
+            accountNumber: null,
+            accountNumberEncrypted: encrypted.ciphertext,
+            accountNumberLast4: encrypted.last4,
+            accountNumberHash: encrypted.lookupHash,
             accountName: resolvedAccountName,
             reference,
             status: 'pending',
           },
         })
+
+        // Journal entry for the same movement, in the same transaction. If the
+        // group does not balance this throws and undoes the debit, so money can
+        // never move without a record of where it went.
+        await postLedger(
+          tx,
+          `withdrawal:${withdrawal.id}`,
+          withdrawalDebitLegs(
+            {
+              id: withdrawal.id,
+              reference,
+              userId,
+              amount,
+              fee: withdrawalFee,
+              estimatedTax,
+              netAmount,
+            },
+            // Re-read because updateMany above did not return the row.
+            (await tx.user.findUniqueOrThrow({
+              where: { id: userId },
+              select: { totalAmount: true },
+            })).totalAmount,
+          ),
+        )
+
+        return withdrawal
       })
 
       let finalStatus = withdrawal.status
@@ -306,19 +374,38 @@ router.post(
           await notifyWithdrawalProcessing(userId, amount)
         } else {
           // Monnify explicitly rejected the payout — safe to refund balance.
-          await db.$transaction([
-            db.user.update({
+          await db.$transaction(async (tx) => {
+            const refunded = await tx.user.update({
               where: { id: userId },
-              data: { totalAmount: { increment: amount } },
-            }),
-            db.withdrawal.update({
+              data: { totalAmount: { increment: withdrawal.amount } },
+              select: { totalAmount: true },
+            })
+
+            await tx.withdrawal.update({
               where: { id: withdrawal.id },
               data: {
                 status: 'failed',
                 failureReason: disbursement.responseMessage,
               },
-            }),
-          ])
+            })
+
+            // Reverse of the debit posted at creation time.
+            await postLedger(              tx,
+              `withdrawal-refund:${withdrawal.id}`,
+              withdrawalRefundLegs(
+                {
+                  id: withdrawal.id,
+                  reference,
+                  userId,
+                  amount: withdrawal.amount,
+                  fee: withdrawal.fee,
+                  estimatedTax: withdrawal.estimatedTax,
+                  netAmount: withdrawal.netAmount,
+                },
+                refunded.totalAmount,
+              ),
+            )
+          })
           finalStatus = 'failed'
           await notifyWithdrawalFailed(userId, amount, disbursement.responseMessage)
         }
@@ -356,7 +443,7 @@ router.post(
         metadata: { amount, bankCode },
       })
 
-      res.status(201).json({
+      const responseBody = {
         success: true,
         data: {
           withdrawal: {
@@ -369,7 +456,24 @@ router.post(
             status: finalStatus,
           },
         },
-      })
+      }
+
+      // Stored last, after the disbursement outcome is known, so a replay
+      // reports the real status instead of claiming the payout is still
+      // pending when it already failed.
+      if (idemKey) {
+        await db.idempotencyKey.update({
+          where: { scope_key: { scope: idemScope, key: idemKey } },
+          data: { responseStatus: 201, responseBody },
+        }).catch((err) => {
+          console.error(
+            `[WITHDRAWAL] Failed to store idempotent response for ${withdrawal.reference}:`,
+            err,
+          )
+        })
+      }
+
+      res.status(201).json(responseBody)
     } catch (error) {
       next(error)
     }
@@ -395,6 +499,21 @@ router.post('/webhook', async (req, res, next) => {
 
     const payload = req.body
     const { eventType, eventData } = payload
+
+    // Monnify retries until it gets a 2xx, so the same event arrives
+    // repeatedly. The unique index here makes the first delivery the only one
+    // that does any work; the rest are acknowledged and dropped. The status
+    // claims further down still guard the money, so this is about not
+    // re-deriving a different audit trail for a replay.
+    const { claimed } = await claimWebhookEvent({
+      provider: 'monnify',
+      eventId: eventData?.reference || eventData?.transactionReference || '',
+      eventType: eventType || 'unknown',
+      payload,
+    })
+    if (!claimed) {
+      return res.status(200).json({ success: true, data: { duplicate: true } })
+    }
 
     // Allowlist rather than the raw payload. A disbursement event carries the
     // destination account number and account-holder name, and GET /admin/audit
@@ -452,7 +571,14 @@ router.post('/webhook', async (req, res, next) => {
 
       const existing = await db.withdrawal.findFirst({
         where: { reference: eventData.reference },
-        select: { userId: true, amount: true },
+        select: {
+          id: true,
+          userId: true,
+          amount: true,
+          fee: true,
+          netAmount: true,
+          estimatedTax: true,
+        },
       })
 
       // Refund balance on confirmed failure. The claim is a conditional write
@@ -469,10 +595,28 @@ router.post('/webhook', async (req, res, next) => {
         })
         if (claim.count === 0) return false
         if (existing) {
-          await tx.user.update({
+          const refundedUser = await tx.user.update({
             where: { id: existing.userId },
             data: { totalAmount: { increment: existing.amount } },
+            select: { totalAmount: true },
           })
+
+          await postLedger(
+            tx,
+            `withdrawal-refund:${existing.id}`,
+            withdrawalRefundLegs(
+              {
+                id: existing.id,
+                reference: eventData.reference,
+                userId: existing.userId,
+                amount: existing.amount,
+                fee: existing.fee,
+                estimatedTax: existing.estimatedTax,
+                netAmount: existing.netAmount,
+              },
+              refundedUser.totalAmount,
+            ),
+          )
         }
         return true
       })
