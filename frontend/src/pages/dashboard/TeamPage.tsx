@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, Trash2 } from 'lucide-react'
 import { api, ApiError } from '~/lib/api'
-import { useAuthStore, useUIStore } from '~/lib/store'
+import { useUIStore } from '~/lib/store'
 import { Avatar } from '~/components/ui/Avatar'
 
 const fadeUp = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }
@@ -62,14 +62,28 @@ function TeamSvg() {
 }
 
 export default function TeamPage() {
-  const { user } = useAuthStore()
   const [teams, setTeams] = useState<any[]>([])
   const [username, setUsername] = useState('')
   const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const addToast = useUIStore((s) => s.addToast)
 
+  const loadTeams = () =>
+    api<any>('/teams')
+      .then((data) => {
+        setTeams(Array.isArray(data) ? data : data.team || [])
+        setLoadError(null)
+      })
+      .catch((err) => {
+        // Only business accounts can split tips; don't render a false
+        // "no team members" empty state for everyone else.
+        setLoadError(
+          err instanceof ApiError ? err.message : 'Could not load your team'
+        )
+      })
+
   useEffect(() => {
-    api<any>('/teams').then((data) => setTeams(Array.isArray(data) ? data : data.team || [])).catch(() => {})
+    loadTeams()
   }, [])
 
   const handleAdd = async (e: React.FormEvent) => {
@@ -79,7 +93,7 @@ export default function TeamPage() {
       await api('/teams', { method: 'POST', body: { username } })
       addToast('success', 'Member added!')
       setUsername('')
-    api<any>('/teams').then((data) => setTeams(Array.isArray(data) ? data : data.team || [])).catch(() => {})
+      loadTeams()
     } catch (err) {
       addToast('error', err instanceof ApiError ? err.message : 'Failed')
     } finally { setLoading(false) }
@@ -87,11 +101,12 @@ export default function TeamPage() {
 
   const handleRemove = async (memberId: string) => {
     try {
+      // The route is keyed by the member's User id, not the Team row id.
       await api(`/teams/${memberId}`, { method: 'DELETE' })
-      setTeams((prev) => prev.filter((t) => t.id !== memberId))
+      setTeams((prev) => prev.filter((t) => t.memberId !== memberId))
       addToast('success', 'Member removed')
     } catch (err) {
-      addToast('error', 'Failed to remove member')
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to remove member')
     }
   }
 
@@ -124,7 +139,16 @@ export default function TeamPage() {
           <span className="text-xs font-bold text-gray-400 bg-gray-100 px-2.5 py-0.5 rounded-full">{teams.length}</span>
         </div>
         <div className="rounded-3xl bg-white border border-gray-200/60 overflow-hidden shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
-          {teams.length === 0 ? (
+          {loadError ? (
+            <div className="py-8 px-5 flex flex-col items-center text-center">
+              <p className="text-sm font-bold text-dark-text">Team unavailable</p>
+              <p className="text-xs text-gray-400 mt-1">{loadError}</p>
+              <button onClick={loadTeams}
+                className="mt-4 text-xs font-semibold text-accent hover:text-accent-hover transition-colors">
+                Try again
+              </button>
+            </div>
+          ) : teams.length === 0 ? (
             <div className="py-8 flex flex-col items-center">
               <TeamSvg />
               <p className="text-sm font-bold text-dark-text mt-2">No team members</p>
@@ -142,13 +166,14 @@ export default function TeamPage() {
                     i < teams.length - 1 ? 'border-b border-gray-100' : ''
                   } hover:bg-gray-50/50 transition-colors group`}>
                   <div className="flex items-center gap-3">
-                    <Avatar name={member.displayName || member.username} size="sm" />
+                    <Avatar name={member.member?.displayName || member.member?.username || 'Member'} size="sm" />
                     <div>
-                      <p className="text-sm font-semibold text-dark-text">{member.displayName}</p>
-                      <p className="text-xs text-gray-400">@{member.username}</p>
+                      <p className="text-sm font-semibold text-dark-text">{member.member?.displayName}</p>
+                      <p className="text-xs text-gray-400">@{member.member?.username}</p>
                     </div>
                   </div>
-                  <button onClick={() => handleRemove(member.id)}
+                  <button onClick={() => handleRemove(member.memberId)}
+                    aria-label={`Remove ${member.member?.username || 'member'}`}
                     className="p-2 rounded-xl text-gray-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all">
                     <Trash2 className="h-4 w-4" />
                   </button>
