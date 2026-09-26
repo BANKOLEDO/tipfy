@@ -31,23 +31,19 @@ export function createApp() {
   )
 
   app.use(cors(getCorsOptions()))
-  app.use(express.json({ limit: '10kb' }))
+  // The webhook signature is computed over the exact bytes Monnify sent, so we
+  // must keep the raw body. This has to be captured inside body-parser's
+  // `verify` hook: a later req.on('end') listener would attach to an already
+  // consumed stream, never fire, and hang the request.
+  app.use(
+    express.json({
+      limit: '10kb',
+      verify: (req, _res, buf) => {
+        ;(req as any).rawBody = buf.toString('utf8')
+      },
+    })
+  )
   app.use(express.urlencoded({ extended: false, limit: '10kb' }))
-
-  app.use((req, _res, next) => {
-    if (req.originalUrl.includes('/webhook')) {
-      let data = ''
-      req.setEncoding('utf8')
-      req.on('data', (chunk) => { data += chunk })
-      req.on('end', () => {
-        ;(req as any).rawBody = data
-        try { req.body = JSON.parse(data) } catch { /* keep parsed body */ }
-        next()
-      })
-    } else {
-      next()
-    }
-  })
 
   app.use(hpp())
 
