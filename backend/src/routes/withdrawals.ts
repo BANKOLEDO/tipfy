@@ -33,7 +33,17 @@ router.get('/', authenticate, async (req, res, next) => {
       _sum: { amount: true },
     })
 
-    const availableBalance = Number(user?.totalAmount || 0)
+    // In-flight withdrawals are already debited from totalAmount but not yet
+    // settled, so they must be excluded here too — otherwise the balance the
+    // user is shown disagrees with the one POST / enforces.
+    const pendingWithdrawals = await db.withdrawal.aggregate({
+      where: { userId, status: { in: ['pending', 'processing'] } },
+      _sum: { amount: true },
+    })
+
+    const grossBalance = Number(user?.totalAmount || 0)
+    const inFlightWithdrawals = Number(pendingWithdrawals._sum.amount || 0)
+    const availableBalance = Math.max(0, grossBalance - inFlightWithdrawals)
     const pendingAmount = Number(pendingTips._sum.amount || 0)
 
     const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
@@ -51,6 +61,8 @@ router.get('/', authenticate, async (req, res, next) => {
       success: true,
       data: {
         balance: availableBalance,
+        grossBalance,
+        inFlightWithdrawals,
         pendingAmount,
         totalTips: user?.totalTipsReceived || 0,
         monthlyWithdrawals,
