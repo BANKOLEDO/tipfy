@@ -61,7 +61,12 @@ export const withdrawSchema = z.object({
     .number()
     .min(1000, 'Minimum withdrawal is ₦1,000')
     .max(500000, 'Maximum withdrawal is ₦500,000'),
-  bankCode: z.string().min(1, 'Select a bank'),
+  // Monnify bank codes are exactly 3 digits. `min(1)` let an arbitrary string
+  // through to the disbursement API, where it fell back to 'Unknown Bank'.
+  bankCode: z
+    .string()
+    .length(3, 'Select a bank')
+    .regex(/^\d{3}$/, 'Select a valid bank'),
   accountNumber: z
     .string()
     .length(10, 'Account number must be 10 digits')
