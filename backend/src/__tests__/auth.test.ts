@@ -125,6 +125,21 @@ describe('Auth - Login', () => {
     expect(res.body.data.user.passwordHash).toBeUndefined()
   })
 
+  it('issues distinct tokens for back-to-back logins', async () => {
+    // Regression: createToken used to set only iat, which has one-second
+    // granularity, so two logins for the same user within the same second
+    // produced byte-identical JWTs. Session.tokenHash is unique, so the second
+    // insert threw and the caller got a 500 -- a double-clicked login button.
+    const [first, second] = await Promise.all([
+      request.post('/api/v1/auth/login').send({ email: registeredEmail, password: registeredPassword }),
+      request.post('/api/v1/auth/login').send({ email: registeredEmail, password: registeredPassword }),
+    ])
+
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(200)
+    expect(first.body.data.token).not.toBe(second.body.data.token)
+  })
+
   it('rejects wrong password', async () => {
     const res = await request.post('/api/v1/auth/login').send({
       email: registeredEmail,
