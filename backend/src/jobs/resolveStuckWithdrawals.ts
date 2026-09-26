@@ -1,5 +1,7 @@
 import { db } from '~/lib/db'
 import { getDisbursementStatus } from '~/services/monnify'
+import { logAuditEvent, AuditActions } from '~/lib/audit'
+import { runIfLeader } from '~/jobs/leaderLock'
 import {
   notifyWithdrawalCompleted,
   notifyWithdrawalFailed,
@@ -29,9 +31,21 @@ export async function resolveStuckWithdrawals(): Promise<number> {
       )
 
       if (match?.status === 'SUCCESSFUL') {
-        await db.withdrawal.update({
-          where: { id: withdrawal.id },
+        // Guarded claim: the webhook (and a second reaper instance) may settle
+        // this row first. Only the request that actually flips it out of
+        // 'processing' may notify.
+        const claimed = await db.withdrawal.updateMany({
+          where: { id: withdrawal.id, status: 'processing' },
           data: { status: 'completed', processedAt: new Date() },
+        })
+
+        if (claimed.count === 0) continue
+
+        await logAuditEvent({
+          action: AuditActions.WITHDRAWAL_COMPLETE,
+          resource: 'withdrawal',
+          resourceId: withdrawal.reference,
+          metadata: { amount: Number(withdrawal.amount), source: 'reaper' },
         })
         await notifyWithdrawalCompleted(
           withdrawal.userId,
@@ -39,34 +53,58 @@ export async function resolveStuckWithdrawals(): Promise<number> {
         )
         console.log(`[JOBS] Resolved stuck withdrawal ${withdrawal.reference} as completed`)
       } else if (match?.status === 'FAILED' || match?.status === 'FAILED_CREDIT') {
-        await db.$transaction([
-          db.withdrawal.update({
-            where: { id: withdrawal.id },
-            data: {
-              status: 'failed',
-              failureReason:
-                match.responseMessage || 'Disbursement failed',
-            },
-          }),
-          db.user.update({
+        const reason = match.responseMessage || 'Disbursement failed'
+
+        const refunded = await db.$transaction(async (tx) => {
+          const claim = await tx.withdrawal.updateMany({
+            where: { id: withdrawal.id, status: 'processing' },
+            data: { status: 'failed', failureReason: reason },
+          })
+          if (claim.count === 0) return false
+          await tx.user.update({
             where: { id: withdrawal.userId },
             data: { totalAmount: { increment: withdrawal.amount } },
-          }),
-        ])
+          })
+          return true
+        })
+
+        if (!refunded) continue
+
+        await logAuditEvent({
+          action: AuditActions.WITHDRAWAL_FAIL,
+          resource: 'withdrawal',
+          resourceId: withdrawal.reference,
+          metadata: {
+            amount: Number(withdrawal.amount),
+            reason,
+            source: 'reaper',
+          },
+        })
         await notifyWithdrawalFailed(
           withdrawal.userId,
           Number(withdrawal.amount),
-          match.responseMessage || 'Disbursement failed'
+          reason
         )
         console.log(`[JOBS] Resolved stuck withdrawal ${withdrawal.reference} as failed (refunded)`)
       } else {
         // Still in flight or status unknown — note the check and move on.
-        await db.withdrawal.update({
-          where: { id: withdrawal.id },
+        // Merge rather than overwrite: monnifyResponse holds the original
+        // initiateDisbursement response, which is the only evidence of what
+        // the provider was actually told.
+        const existing =
+          typeof withdrawal.monnifyResponse === 'object' &&
+          withdrawal.monnifyResponse !== null &&
+          !Array.isArray(withdrawal.monnifyResponse)
+            ? (withdrawal.monnifyResponse as Record<string, unknown>)
+            : {}
+
+        await db.withdrawal.updateMany({
+          where: { id: withdrawal.id, status: 'processing' },
           data: {
             monnifyResponse: {
+              ...existing,
               lastCheckAt: new Date().toISOString(),
-              status: match?.status || 'unknown',
+              lastKnownStatus: match?.status || 'unknown',
             },
           },
         })
@@ -85,9 +123,7 @@ export async function resolveStuckWithdrawals(): Promise<number> {
 
 export function startWithdrawalReaper(): NodeJS.Timeout {
   const timer = setInterval(() => {
-    resolveStuckWithdrawals().catch((err) => {
-      console.error('[JOBS] Failed to resolve stuck withdrawals:', err)
-    })
+    runIfLeader(resolveStuckWithdrawals, 'resolve stuck withdrawals')
   }, RUN_INTERVAL_MS)
   timer.unref()
   return timer
