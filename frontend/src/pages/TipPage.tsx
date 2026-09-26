@@ -66,6 +66,14 @@ export default function TipPage() {
       })
       if (res.checkoutUrl) {
         window.location.href = res.checkoutUrl
+      } else {
+        // Never leave the tipper on the processing spinner: without a checkout
+        // URL the tip is stuck as an orphaned pending record.
+        setStep('details')
+        addToast('error',
+          'We could not start the payment. Your card was not charged' +
+          (res.reference ? ` (ref: ${res.reference})` : '') + '. Please try again.'
+        )
       }
     } catch (err) {
       setStep('details')
