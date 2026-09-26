@@ -11,6 +11,10 @@ export default defineConfig({
     globals: true,
     testTimeout: 30000,
     hookTimeout: 30000,
+    // Only the TypeScript sources. Without this, `tsc` output in dist/ is also
+    // matched, so every suite runs twice against the same live database.
+    include: ['src/**/*.test.ts'],
+    exclude: ['node_modules/**', 'dist/**'],
     // Test files share the same live Neon DB and each file wipes all 'test+'
     // rows in afterAll — run files serially so they can't delete each other's
     // in-flight data.
