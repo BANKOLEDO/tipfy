@@ -1,11 +1,6 @@
-import { config } from 'dotenv'
+import './env'
 import { resolve } from 'path'
-import dns from 'dns'
 import fs from 'fs'
-
-// Use Google DNS to resolve Neon hostname (ISP DNS can't resolve it)
-dns.setServers(['8.8.8.8', '8.8.4.4'])
-dns.setDefaultResultOrder('ipv4first')
 
 const root = resolve(__dirname, '../..')
 
@@ -28,9 +23,6 @@ if (testUrl && prodUrl && testUrl === prodUrl) {
       'Create an isolated test database (e.g. a Neon branch) and point .env.test at it.'
   )
 }
-
-config({ path: resolve(root, '.env.test'), override: true })
-process.env.NODE_ENV = 'test'
 
 import { db } from '~/lib/db'
 

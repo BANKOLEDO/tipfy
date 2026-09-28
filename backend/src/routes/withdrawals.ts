@@ -12,7 +12,8 @@ import { initiateDisbursement, verifyWebhookSignature, validateAccount } from '~
 import { notifyWithdrawalCompleted, notifyWithdrawalProcessing, notifyWithdrawalFailed } from '~/services/notifications'
 import { computeWithdrawalFee, estimateWithholdingTax } from '~/lib/fees'
 import { getEnv } from '~/config/env'
-import { postLedger, withdrawalDebitLegs, withdrawalRefundLegs } from '~/lib/ledger'
+import { Prisma } from '@prisma/client'
+import { postLedger, withdrawalDebitLegs, withdrawalRefundLegs, dec } from '~/lib/ledger'
 import { encryptAccountNumber, readAccountNumber, maskAccountNumber } from '~/lib/crypto'
 import {
   claimIdempotencyKey,
@@ -21,6 +22,24 @@ import {
   replayIdempotent,
 } from '~/lib/idempotency'
 import { claimWebhookEvent } from '~/lib/webhookEvents'
+
+/**
+ * Parse a webhook amount strictly. Returns null for anything unusable.
+ *
+ * lib/ledger's dec() coerces undefined to 0, which is right for posting a
+ * known-good column but wrong here: a missing fee must not silently become 0
+ * and pass verification.
+ */
+function toDecimal(value: unknown): Prisma.Decimal | null {
+  if (typeof value !== 'number' && typeof value !== 'string') return null
+  if (typeof value === 'number' && !Number.isFinite(value)) return null
+  try {
+    const parsed = new Prisma.Decimal(value)
+    return parsed.isFinite() ? parsed : null
+  } catch {
+    return null
+  }
+}
 
 const router = Router()
 
@@ -538,29 +557,83 @@ router.post('/webhook', async (req, res, next) => {
         return res.status(400).json({ success: false, message: 'Missing reference' })
       }
 
+      const withdrawal = await db.withdrawal.findFirst({
+        where: { reference: eventData.reference },
+        select: { id: true, userId: true, amount: true, netAmount: true, status: true },
+      })
+
+      if (!withdrawal) {
+        return res.status(400).json({ success: false, message: 'Unknown withdrawal reference' })
+      }
+
+      // Verify the payout against our own record before marking it paid.
+      // eventData.amount is the principal the recipient receives, which must
+      // match the netAmount we asked Monnify to send. eventData.fee is
+      // Monnify's transfer fee, charged on top of amount.
+      const principal = toDecimal(eventData.amount)
+      const providerFee = toDecimal(eventData.fee)
+
+      if (
+        !principal ||
+        !providerFee ||
+        !principal.eq(dec(withdrawal.netAmount)) ||
+        providerFee.lt(0)
+      ) {
+        console.error(
+          `[WITHDRAWALS] Refusing to complete ${eventData.reference}: provider reported ` +
+            `amount=${eventData.amount} fee=${eventData.fee}, our record says ` +
+            `netAmount=${withdrawal.netAmount}. Held for review.`,
+        )
+        await logAuditEvent({
+          action: 'WITHDRAWAL_AMOUNT_MISMATCH',
+          resource: 'withdrawal',
+          resourceId: eventData.reference,
+          ipAddress: req.ip,
+          metadata: {
+            reference: eventData.reference,
+            reportedAmount: eventData.amount,
+            reportedFee: eventData.fee,
+            expectedNetAmount: String(withdrawal.netAmount),
+            status: withdrawal.status,
+          },
+        })
+        // 202 so Monnify stops retrying. A mismatch will not fix itself.
+        return res.status(202).json({
+          success: false,
+          error: { message: 'Amount mismatch; held for review.' },
+        })
+      }
+
       // Monnify retries until it gets a 2xx, so the same event can arrive
       // concurrently. Claim the row with a conditional write and only act if
       // this request is the one that flipped it out of 'processing'.
       const claimed = await db.withdrawal.updateMany({
         where: { reference: eventData.reference, status: 'processing' },
-        data: { status: 'completed', processedAt: new Date() },
+        data: {
+          status: 'completed',
+          processedAt: new Date(),
+          monnifyResponse: {
+            providerAmount: principal.toNumber(),
+            providerFee: providerFee.toNumber(),
+            eventType,
+          } as Prisma.InputJsonValue,
+        },
       })
 
       if (claimed.count > 0) {
-        const withdrawal = await db.withdrawal.findFirst({
-          where: { reference: eventData.reference },
-          select: { userId: true, amount: true },
+        await logAuditEvent({
+          action: AuditActions.WITHDRAWAL_COMPLETE,
+          resource: 'withdrawal',
+          resourceId: eventData.reference,
+          ipAddress: req.ip,
+          metadata: {
+            amount: Number(withdrawal.amount),
+            netAmount: principal.toNumber(),
+            providerFee: providerFee.toNumber(),
+            source: 'webhook',
+          },
         })
-        if (withdrawal) {
-          await logAuditEvent({
-            action: AuditActions.WITHDRAWAL_COMPLETE,
-            resource: 'withdrawal',
-            resourceId: eventData.reference,
-            ipAddress: req.ip,
-            metadata: { amount: Number(withdrawal.amount), source: 'webhook' },
-          })
-          await notifyWithdrawalCompleted(withdrawal.userId, Number(withdrawal.amount))
-        }
+        await notifyWithdrawalCompleted(withdrawal.userId, principal.toNumber())
       }
     }
 
