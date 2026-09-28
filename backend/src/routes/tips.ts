@@ -827,7 +827,7 @@ router.post(
         })
 
         if (tip && tip.status === 'pending') {
-          await completeTip(tip, eventData.paymentMethod, eventData.transactionReference)
+          await completeTip(tip, eventData.paymentMethod || 'CARD', eventData.transactionReference)
         }
       }
 

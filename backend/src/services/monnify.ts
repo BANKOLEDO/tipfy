@@ -77,18 +77,36 @@ export interface MonnifyPaymentResponse {
   }
 }
 
+/**
+ * Monnify SUCCESSFUL_TRANSACTION (collection) webhook.
+ *
+ * Amounts are in naira, NOT kobo: amountPaid: 3000 is ₦3000, and it arrives as
+ * a number or a "180000.00" string. Do not scale it.
+ *
+ * This is deliberately a closed type matching only the fields the app reads.
+ * The disbursement webhooks (SUCCESSFUL_DISBURSEMENT, FAILED_DISBURSEMENT,
+ * REVERSED_DISBURSEMENT) carry a different shape — reference/amount/fee/status,
+ * where fee is charged ON TOP of amount — and are handled untyped in
+ * withdrawals.ts. There is intentionally no `amount`/`paidAt`/`customerName`
+ * property here: those names exist in no Monnify payload, and a closed type is
+ * what turns a future typo into a compile error instead of a silent undefined.
+ */
 export interface MonnifyWebhookPayload {
   eventType: string
   eventData: {
     transactionReference: string
     paymentReference: string
-    amount: number
-    paidAt: string
-    paymentStatus: string
-    paymentMethod: string
-    customerName: string
-    customerEmail: string
-    metadata: Record<string, string>
+    /** Gross charged to the customer, in naira. */
+    amountPaid: number | string
+    /** Net Monnify settles to the merchant; the difference from amountPaid is the platform's MDR+VAT cost. */
+    settlementAmount?: number | string
+    totalPayable?: number | string
+    paidOn?: string
+    paymentStatus?: string
+    paymentMethod?: string
+    currency?: string
+    customer?: { name?: string; email?: string }
+    metaData?: Record<string, unknown>
   }
 }
 
