@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import os from 'os'
 import { db } from '~/lib/db'
 import { AppError } from '~/lib/errors'
 import { requireAdmin, requireSuperAdmin } from '~/middleware/admin'
@@ -826,14 +827,28 @@ router.get('/audit', async (req, res, next) => {
 // ─── Health / System Info ──────────────────────────────────────
 router.get('/health', async (_req, res, next) => {
   try {
+    const start = process.hrtime.bigint()
     const dbOk = await db.$queryRaw`SELECT 1`.then(() => true).catch(() => false)
+    const dbLatencyMs = Number(process.hrtime.bigint() - start) / 1e6
+
+    // How long a setImmediate callback actually waits. A healthy idle server
+    // is single-digit ms; a saturated event loop climbs into the hundreds.
+    const eventLoopLagMs = await new Promise<number>((resolve) => {
+      const t = process.hrtime.bigint()
+      setImmediate(() => resolve(Number(process.hrtime.bigint() - t) / 1e6))
+    })
 
     res.json({
       success: true,
       data: {
         database: dbOk ? 'connected' : 'disconnected',
+        dbLatencyMs: Math.round(dbLatencyMs * 100) / 100,
+        eventLoopLagMs: Math.round(eventLoopLagMs * 100) / 100,
+        cpuLoad: os.loadavg(),
         uptime: process.uptime(),
         memory: process.memoryUsage(),
+        nodeVersion: process.version,
+        platform: process.platform,
         timestamp: new Date().toISOString(),
       },
     })
