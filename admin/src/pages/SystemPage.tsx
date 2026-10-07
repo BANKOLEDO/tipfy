@@ -10,6 +10,11 @@ interface HealthData {
   uptime: number
   memory: { heapUsed: number; heapTotal: number; rss: number }
   timestamp: string
+  dbLatencyMs?: number
+  eventLoopLagMs?: number
+  cpuLoad?: number[]
+  nodeVersion?: string
+  platform?: string
 }
 
 function formatBytes(bytes: number) { return `${(bytes / (1024 * 1024)).toFixed(1)} MB` }
@@ -96,6 +101,20 @@ export default function SystemPage() {
       value: data.memory ? formatBytes(data.memory.rss) : '—',
       sub: 'Resident set size',
       ok: true,
+    },
+    {
+      title: 'Server Speed', icon: Activity,
+      gradient: 'from-cyan-500 to-cyan-600',
+      value: data.dbLatencyMs != null ? `${data.dbLatencyMs} ms` : '—',
+      sub: 'Database query latency',
+      ok: (data.dbLatencyMs ?? 999) < 100,
+    },
+    {
+      title: 'Event Loop Lag', icon: Clock,
+      gradient: 'from-rose-500 to-rose-600',
+      value: data.eventLoopLagMs != null ? `${data.eventLoopLagMs} ms` : '—',
+      sub: 'Main thread responsiveness',
+      ok: (data.eventLoopLagMs ?? 999) < 50,
     },
   ]
 
