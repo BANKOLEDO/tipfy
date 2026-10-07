@@ -22,10 +22,12 @@ export default function LoginPage() {
     setLoading(true)
     try {
       const data = await api('/auth/login', { method: 'POST', body: { email, password } }) as any
-      // Staff/admin logins are gated behind an emailed OTP and return no
-      // token. Storing `undefined` here would leave a broken session.
+      // Staff logins are gated behind an emailed OTP and return no token.
+      // Storing `undefined` here would leave a broken session. The message is
+      // deliberately role-neutral: naming the admin panel here would confirm
+      // that the address belongs to a staff account.
       if (data?.requiresOtp) {
-        addToast('error', 'This account requires a verification code. Please sign in at the admin panel.')
+        addToast('error', 'This account requires a verification code. Check your email to continue.')
         setLoading(false)
         return
       }
